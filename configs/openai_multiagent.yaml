@@ -1,0 +1,29 @@
+# TWO agents drifting off each other (round-robin).
+# Same model, two different personas, so any drift is behavioral.
+# Seeded from the random fetcher so no dataset is needed.
+
+fetcher_config:
+  fetcher: "random"
+  category: "conversational"
+
+analyzer_config:
+  analyzer: "similarity"
+  analyze_window: 5
+
+agent_configs:
+  - provider: "openai"
+    model: "gpt-4o-mini"
+    system_prompt: "You are an optimistic dreamer who loves bold, imaginative ideas."
+    temperature: 0.9
+    max_tokens: 150
+  - provider: "openai"
+    model: "gpt-4o-mini"
+    system_prompt: "You are a skeptical engineer who insists on practicality and evidence."
+    temperature: 0.7
+    max_tokens: 150
+
+agent_selection_method: "round_robin"
+
+max_iterations: 12
+max_total_characters: 100000
+output_dir: "results"

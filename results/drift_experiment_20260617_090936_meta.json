@@ -1,0 +1,36 @@
+{
+  "timestamp": "2026-06-17 09:09:36.981270",
+  "config": {
+    "fetcher_config": {
+      "fetcher": "FetcherType.SHAREGPT",
+      "data_path": "data/sharegpt_real.json",
+      "second_data_path": null,
+      "category": null,
+      "min_messages": 2,
+      "max_messages": 10
+    },
+    "analyzer_config": {
+      "analyzer": "AnalyzerType.SIMILARITY",
+      "analyze_window": 5
+    },
+    "agent_configs": [
+      {
+        "provider": "Provider.OPENAI",
+        "model": "OpenAIModels.GPT4O_MINI",
+        "system_prompt": "You are a helpful assistant participating in a conversation.",
+        "temperature": 0.7,
+        "max_tokens": 150,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+        "top_p": 1.0
+      }
+    ],
+    "agent_selection_method": "AgentSelectionMethod.ROUND_ROBIN",
+    "max_iterations": 12,
+    "max_total_characters": 100000,
+    "output_dir": "results"
+  },
+  "num_iterations_total": 12,
+  "num_fetcher_messages": 2,
+  "total_characters": 9739
+}

@@ -1,0 +1,29 @@
+# OpenAI self-loop seeded from a ShareGPT-format conversation dataset.
+# Reads data/sharegpt_sample.json, picks a random conversation as the
+# starting point, then lets the agent continue it on its own.
+
+fetcher_config:
+  fetcher: "sharegpt"
+  data_path: "data/sharegpt_real.json"   # 400 real ShareGPT conversations from HuggingFace
+  min_messages: 2
+  max_messages: 10
+
+analyzer_config:
+  analyzer: "similarity"
+  analyze_window: 5
+
+agent_configs:
+  - provider: "openai"
+    model: "gpt-4o-mini"
+    system_prompt: "You are a helpful assistant participating in a conversation."
+    temperature: 0.7
+    max_tokens: 150
+    frequency_penalty: 0.0
+    presence_penalty: 0.0
+    top_p: 1.0
+
+agent_selection_method: "round_robin"
+
+max_iterations: 12
+max_total_characters: 100000
+output_dir: "results"

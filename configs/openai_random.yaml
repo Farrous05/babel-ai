@@ -1,0 +1,27 @@
+# OpenAI agent self-loop, no dataset required.
+# Seeds from the `random` web fetcher; keeps iterations/tokens small
+# to keep cost to pennies for a first smoke test.
+
+fetcher_config:
+  fetcher: "random"        # pulls a seed prompt from public web APIs, no data file
+  category: "creative"     # creative | analytical | conversational
+
+analyzer_config:
+  analyzer: "similarity"
+  analyze_window: 5
+
+agent_configs:
+  - provider: "openai"
+    model: "gpt-4o-mini"
+    system_prompt: "You are a helpful assistant participating in a conversation."
+    temperature: 0.7
+    max_tokens: 150
+    frequency_penalty: 0.0
+    presence_penalty: 0.0
+    top_p: 1.0
+
+agent_selection_method: "round_robin"
+
+max_iterations: 10           # small first run
+max_total_characters: 100000
+output_dir: "results"

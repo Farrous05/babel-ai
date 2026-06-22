@@ -99,6 +99,8 @@ class OpenAIModels(Enum):
 
     GPT4_1106_PREVIEW = "gpt-4-1106-preview"
     GPT4_0125_PREVIEW = "gpt-4-0125-preview"
+    GPT4O_MINI = "gpt-4o-mini"
+    GPT4O = "gpt-4o"
 
 
 class OllamaModels(Enum):

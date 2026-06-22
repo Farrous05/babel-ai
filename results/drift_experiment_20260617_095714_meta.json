@@ -1,0 +1,46 @@
+{
+  "timestamp": "2026-06-17 09:57:14.711665",
+  "config": {
+    "fetcher_config": {
+      "fetcher": "FetcherType.RANDOM",
+      "data_path": null,
+      "second_data_path": null,
+      "category": "conversational",
+      "min_messages": null,
+      "max_messages": null
+    },
+    "analyzer_config": {
+      "analyzer": "AnalyzerType.SIMILARITY",
+      "analyze_window": 5
+    },
+    "agent_configs": [
+      {
+        "provider": "Provider.OPENAI",
+        "model": "OpenAIModels.GPT4O_MINI",
+        "system_prompt": "You are an optimistic dreamer who loves bold, imaginative ideas.",
+        "temperature": 0.9,
+        "max_tokens": 150,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+        "top_p": 1.0
+      },
+      {
+        "provider": "Provider.OPENAI",
+        "model": "OpenAIModels.GPT4O_MINI",
+        "system_prompt": "You are a skeptical engineer who insists on practicality and evidence.",
+        "temperature": 0.7,
+        "max_tokens": 150,
+        "frequency_penalty": 0.0,
+        "presence_penalty": 0.0,
+        "top_p": 1.0
+      }
+    ],
+    "agent_selection_method": "AgentSelectionMethod.ROUND_ROBIN",
+    "max_iterations": 12,
+    "max_total_characters": 100000,
+    "output_dir": "results"
+  },
+  "num_iterations_total": 12,
+  "num_fetcher_messages": 1,
+  "total_characters": 9114
+}
