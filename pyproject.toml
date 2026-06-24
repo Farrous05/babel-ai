@@ -7,12 +7,21 @@ readme = "README.md"
 packages = [{include = "babel_ai", from = "src"}]
 
 [tool.poetry.dependencies]
-python = "^3.13"
+python = ">=3.12,<3.14"
 openai = "^1.59.7"
 anthropic = "^0.42.0"
 ipykernel = "^6.29.5"
 python-dotenv = "^1.0.1"
-torch = "^2.6.0"
+# Intel macOS (x86_64) has no torch wheel past 2.2.2; everyone else keeps 2.6+.
+torch = [
+    { version = "~2.2.2", markers = "sys_platform == 'darwin' and platform_machine == 'x86_64'" },
+    { version = "^2.6.0", markers = "sys_platform != 'darwin' or platform_machine != 'x86_64'" },
+]
+# torch 2.2.2 is built against NumPy 1.x; the 2.6 path is fine with NumPy 2.x.
+numpy = [
+    { version = "<2.0", markers = "sys_platform == 'darwin' and platform_machine == 'x86_64'" },
+    { version = ">=2.0", markers = "sys_platform != 'darwin' or platform_machine != 'x86_64'" },
+]
 transformers = "^4.49.0"
 scipy = "^1.15.2"
 matplotlib = "^3.10.0"

@@ -305,3 +305,18 @@ data/
 
 # logs
 logs/
+
+# claude 
+.claude
+# Generated experiment data (regenerable; kept local)
+results/
+
+# Internal planning / handoff docs (kept local, not part of the public fork)
+/Project_spec.md
+/doc/future_work.md
+/doc/project_summary.md
+
+# Full transcriptions of copyrighted papers (kept local; cited in doc/references.md)
+/doc/Maiti_et_al.md
+/doc/Multi_LLM.md
+/doc/Shumailov.md
