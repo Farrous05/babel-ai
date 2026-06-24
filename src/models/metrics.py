@@ -87,6 +87,17 @@ class AnalysisResult(BaseModel):
         description="Average perplexity of all tokens in the text",
         ge=1.0,
     )
+    version_b_distance: Optional[float] = Field(
+        None,
+        description=(
+            "Spec version-(b) cosine distance of this turn from the collapsed "
+            "window's centroid (1 - cosine). Logged per round once the "
+            "collapse/injection anchor is known; None for runs that never "
+            "collapsed and were not injected. See babel_ai.recovery."
+        ),
+        ge=0.0,
+        le=2.0,
+    )
 
 
 class Metric(BaseModel):
@@ -239,3 +250,41 @@ class ExperimentMetadata(BaseModel):
     num_iterations_total: Optional[int] = None
     num_fetcher_messages: Optional[int] = None
     total_characters: Optional[int] = None
+    # Collapse detection (see babel_ai/collapse.py). Round indices count from
+    # the first self-loop turn (0 = first agent-generated message).
+    collapse_onset_round: Optional[int] = Field(
+        default=None,
+        description="Round collapse was first declared (TTC); None if never",
+    )
+    collapse_rate: Optional[float] = Field(
+        default=None,
+        description="Slope of semantic similarity from round 0 to FIRST onset",
+    )
+    collapse_onsets: list = Field(
+        default_factory=list,
+        description=(
+            "All collapse-onset rounds, in order. >1 entry when the loop "
+            "re-collapses after a repeated injection (detector is rearmed)."
+        ),
+    )
+    # Post-collapse injection (see babel_ai/injection.py). Holds the tagged
+    # InjectionEvent (round, size, source, marker, text, distance, span) or
+    # None if no injection was configured / applied.
+    injection: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "First injection event record (back-compat), or None if no "
+            "injection. All injections (incl. repeats) are in `injections`."
+        ),
+    )
+    injections: list = Field(
+        default_factory=list,
+        description="All injection event records, in order (repeated dosing)",
+    )
+    # Recovery evaluation (see babel_ai/recovery.py). Holds the RecoveryResult
+    # (recovered, recovery_round, hold_length, distances) or None if no
+    # injection was applied.
+    recovery: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Recovery evaluation result, or None if no injection",
+    )

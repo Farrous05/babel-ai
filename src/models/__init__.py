@@ -6,6 +6,7 @@ from .configs import (
     AnalyzerConfig,
     ExperimentConfig,
     FetcherConfig,
+    InjectionConfig,
 )
 
 # Import all metric classes
@@ -23,6 +24,7 @@ __all__ = [
     "AnalyzerConfig",
     "ExperimentConfig",
     "FetcherConfig",
+    "InjectionConfig",
     # Metric classes
     "AgentMetric",
     "AnalysisResult",

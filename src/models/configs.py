@@ -1,4 +1,5 @@
 """Configuration models for drift experiments."""
+
 import logging
 from typing import List, Optional
 
@@ -11,7 +12,14 @@ from pydantic import (
 )
 
 from api.enums import APIModels, Provider
-from babel_ai.enums import AgentSelectionMethod, AnalyzerType, FetcherType
+from babel_ai.enums import (
+    AgentSelectionMethod,
+    AnalyzerType,
+    FetcherType,
+    InjectionSize,
+    InjectionSource,
+    InjectionTrigger,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -217,6 +225,13 @@ class AgentConfig(BaseModel):
     frequency_penalty: Optional[float] = Field(default=0.0, ge=-2.0, le=2.0)
     presence_penalty: Optional[float] = Field(default=0.0, ge=-2.0, le=2.0)
     top_p: Optional[float] = Field(default=1.0, ge=0.0, le=1.0)
+    seed: Optional[int] = Field(
+        default=None,
+        description=(
+            "Request-level sampling seed for reproducibility (best-effort; "
+            "supported by OpenAI / Azure / OpenAI-compatible endpoints)"
+        ),
+    )
 
     @field_validator("model", mode="after")
     def validate_model_provider_compatibility(
@@ -233,6 +248,91 @@ class AgentConfig(BaseModel):
             )
 
         return v
+
+
+class InjectionConfig(BaseModel):
+    """Configuration for the post-collapse text injection (spec step 3).
+
+    When present on an ``ExperimentConfig``, a single injection is applied the
+    first time the collapse detector fires: the model's last output gets an
+    optional ``<end>`` marker plus an injection text appended, fed back as the
+    next input.
+
+    Attributes:
+        size: 1 word / 1 sentence / 1 paragraph (the experiment's IV).
+        source: real (off-topic dataset snippet) or noise (shuffled tokens).
+        use_marker: whether to prepend the marker (toggleable for the later
+            marker-on/off control). Default True.
+        marker: the marker string. Default ``<end>``.
+        corpus_path: text source for the injection. Defaults to the fetcher's
+            ``data_path`` when None.
+        rng_seed: optional seed for reproducible injection sampling.
+    """
+
+    size: InjectionSize = Field(description="Injection size")
+    source: InjectionSource = Field(description="Injection source")
+    trigger: InjectionTrigger = Field(
+        default=InjectionTrigger.AFTER_COLLAPSE,
+        description="When to inject: after_collapse or fixed_round",
+    )
+    fixed_round: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Round to inject at (required for fixed_round trigger)",
+    )
+    interval: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Inject every N rounds (required for fixed_interval)",
+    )
+    repeat: bool = Field(
+        default=False,
+        description=(
+            "For after_collapse: re-inject on each re-collapse (vs once). "
+            "Ignored for fixed_round; fixed_interval always repeats."
+        ),
+    )
+    num_candidates: int = Field(
+        default=1,
+        ge=1,
+        description=(
+            "Sample this many real snippets and pick the one *farthest* "
+            "(max cosine distance) from the collapsed window -- i.e. the most "
+            "off-topic injection. 1 = plain random sampling."
+        ),
+    )
+    use_marker: bool = Field(default=True, description="Prepend the marker")
+    marker: str = Field(default="<end>", description="Marker string")
+    corpus_path: Optional[str] = Field(
+        default=None, description="Corpus for injection text (ShareGPT JSON)"
+    )
+    rng_seed: Optional[int] = Field(
+        default=None, description="Seed for reproducible injection sampling"
+    )
+
+    @model_validator(mode="after")
+    def validate_trigger_params(self) -> "InjectionConfig":
+        """fixed_round / interval are required iff their trigger is set."""
+        if self.trigger == InjectionTrigger.FIXED_ROUND:
+            if self.fixed_round is None:
+                raise ValueError(
+                    "fixed_round is required when trigger is 'fixed_round'"
+                )
+        elif self.fixed_round is not None:
+            raise ValueError(
+                "fixed_round is only allowed when trigger is 'fixed_round'"
+            )
+
+        if self.trigger == InjectionTrigger.FIXED_INTERVAL:
+            if self.interval is None:
+                raise ValueError(
+                    "interval is required when trigger is 'fixed_interval'"
+                )
+        elif self.interval is not None:
+            raise ValueError(
+                "interval is only allowed when trigger is 'fixed_interval'"
+            )
+        return self
 
 
 class ExperimentConfig(BaseModel):
@@ -298,6 +398,23 @@ class ExperimentConfig(BaseModel):
     )
     max_iterations: int = Field(default=100, ge=1)
     max_total_characters: int = Field(default=1000000, ge=1)
+    history_window: Optional[int] = Field(
+        default=1,
+        ge=1,
+        description=(
+            "How many of the most recent messages to feed the model each "
+            "turn. 1 (default) = only the last message, matching the "
+            "Maiti/Multi_LLM self-loop (each model reads only the previous "
+            "output) -- the practical, faithful setup. None = full history "
+            "(legacy; grows with run length, impractical for long runs). "
+            "Note: this only changes the MODEL's input; the analyzer still "
+            "scores the full conversation for the drift metrics."
+        ),
+    )
     output_dir: Optional[str] = Field(
         default=None, description="Directory to save results"
+    )
+    injection_config: Optional[InjectionConfig] = Field(
+        default=None,
+        description="Post-collapse injection; None disables injection",
     )

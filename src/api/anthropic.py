@@ -31,6 +31,7 @@ def anthropic_request(
     presence_penalty: float = 0.0,
     top_p: float = 1.0,
     max_tokens: Optional[int] = None,
+    seed: Optional[int] = None,  # accepted for interface parity; unsupported
 ) -> LLMResponse:
     """
     Send a request to the Anthropic API using the specified Claude model.

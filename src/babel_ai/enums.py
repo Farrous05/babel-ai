@@ -136,6 +136,48 @@ class AgentSelectionMethod(Enum):
             return round_robin_agent_selection(agents)
 
 
+class InjectionSize(Enum):
+    """Size of the text injected to knock a collapsed loop out of repetition.
+
+    WORD: a single word. SENTENCE: one sentence. PARAGRAPH: one paragraph.
+    The independent variable of the v1 experiment.
+    """
+
+    WORD = "word"
+    SENTENCE = "sentence"
+    PARAGRAPH = "paragraph"
+
+
+class InjectionSource(Enum):
+    """Where the injected text comes from.
+
+    REAL: a coherent off-topic snippet sampled from the dataset.
+    NOISE: random/shuffled tokens (the meaning-destroyed control).
+    """
+
+    REAL = "real"
+    NOISE = "noise"
+
+
+class InjectionTrigger(Enum):
+    """When the injection fires.
+
+    AFTER_COLLAPSE: the first time the collapse detector declares collapse
+        (the main intervention). With ``repeat=True``, re-injects on each
+        *re-collapse* after a cooldown.
+    FIXED_ROUND: at a fixed round regardless of collapse -- used for the
+        fresh-run baseline (inject into a run that has not collapsed, to test
+        whether the injected text is simply diverse on its own).
+    FIXED_INTERVAL: every ``interval`` rounds regardless of collapse -- the
+        steady-cadence comparison to AFTER_COLLAPSE+repeat (does dosing on a
+        clock differ from dosing on demand?).
+    """
+
+    AFTER_COLLAPSE = "after_collapse"
+    FIXED_ROUND = "fixed_round"
+    FIXED_INTERVAL = "fixed_interval"
+
+
 class AnalyzerType(Enum):
     """Analyzer types for measuring drift in LLM outputs.
 

@@ -36,6 +36,7 @@ def azure_openai_request(
     presence_penalty: float = 0.0,  # -2.0 to 2.0 higher = more diverse
     top_p: float = 1.0,  # 0.0 to 1.0 higher = more creative
     max_tokens: Optional[int] = None,
+    seed: Optional[int] = None,
 ) -> LLMResponse:
     """Send a request to Azure OpenAI API.
 
@@ -60,6 +61,8 @@ def azure_openai_request(
         "top_p": top_p,
         "max_tokens": max_tokens,
     }
+    if seed is not None:
+        request_params["seed"] = seed
 
     if model in [AzureModels.O4_MINI_2025_04_16, AzureModels.O3_2025_04_16]:
         # O4-mini model does not support the same parameters

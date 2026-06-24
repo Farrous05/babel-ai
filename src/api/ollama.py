@@ -43,6 +43,7 @@ def ollama_request(
     presence_penalty: float = 0.0,
     top_p: float = 1.0,
     max_tokens: Optional[int] = None,
+    seed: Optional[int] = None,
     api_base_url: Optional[str] = API_BASE,
     endpoint: str = "api/chat",
     stream: bool = False,
@@ -141,6 +142,7 @@ def ollama_request(
             "presence_penalty": presence_penalty,
             "top_p": top_p,
             "num_predict": max_tokens,
+            "seed": seed,
         },
         "stream": stream,
     }

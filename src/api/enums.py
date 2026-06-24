@@ -28,6 +28,7 @@ class Provider(Enum):
 
     OPENAI = "openai"
     OLLAMA = "ollama"
+    OLLAMA_COMPANY = "ollama_company"
     RAVEN = "raven"
     AZURE = "azure"
     ANTHROPIC = "anthropic"
@@ -40,6 +41,8 @@ class Provider(Enum):
                 return OpenAIModels
             case Provider.OLLAMA:
                 return OllamaModels
+            case Provider.OLLAMA_COMPANY:
+                return OllamaCompanyModels
             case Provider.RAVEN:
                 return OllamaModels  # Raven uses Ollama models
             case Provider.AZURE:
@@ -59,6 +62,7 @@ class Provider(Enum):
         # Import here to avoid circular imports
         from api.anthropic import anthropic_request
         from api.azure_openai import azure_openai_request
+        from api.company_ollama import company_ollama_request
         from api.ollama import ollama_request, raven_ollama_request
         from api.openai import openai_request
 
@@ -67,6 +71,8 @@ class Provider(Enum):
                 return openai_request
             case Provider.OLLAMA:
                 return ollama_request
+            case Provider.OLLAMA_COMPANY:
+                return company_ollama_request
             case Provider.RAVEN:
                 return raven_ollama_request
             case Provider.AZURE:
@@ -131,6 +137,21 @@ class OllamaModels(Enum):
     GPT_2_1_5B = "gpt2:1.5b"
 
 
+class OllamaCompanyModels(Enum):
+    """Models served by the company's OpenAI-compatible Ollama/vLLM endpoint.
+
+    Model IDs match what is pulled/served on the endpoint. Add entries here as
+    you pull more models (the value must be the exact served model ID).
+
+    Example:
+        >>> model = OllamaCompanyModels.GPT_OSS_120B
+        >>> response = company_ollama_request(messages, model=model)
+    """
+
+    GPT_OSS_120B = "gpt-oss:120b"
+    GPT_OSS_20B = "gpt-oss:20b"
+
+
 class AzureModels(Enum):
     """Enum for available Azure OpenAI models.
 
@@ -175,4 +196,10 @@ class AnthropicModels(Enum):
 
 
 # Union type for all available models
-APIModels = Union[OpenAIModels, OllamaModels, AzureModels, AnthropicModels]
+APIModels = Union[
+    OpenAIModels,
+    OllamaModels,
+    OllamaCompanyModels,
+    AzureModels,
+    AnthropicModels,
+]

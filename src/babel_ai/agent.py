@@ -89,6 +89,7 @@ class Agent:
             frequency_penalty=self.config.frequency_penalty,
             presence_penalty=self.config.presence_penalty,
             top_p=self.config.top_p,
+            seed=self.config.seed,
         )
 
     @staticmethod

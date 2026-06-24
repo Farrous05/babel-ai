@@ -35,6 +35,7 @@ class LLMInterface:
         frequency_penalty: float = 0.0,
         presence_penalty: float = 0.0,
         top_p: float = 1.0,
+        seed: Optional[int] = None,
         # TODO: Configurability is missing here.
         max_retries: int = 3,
         initial_delay: float = 3.0,
@@ -86,6 +87,7 @@ class LLMInterface:
                     frequency_penalty=frequency_penalty,
                     presence_penalty=presence_penalty,
                     top_p=top_p,
+                    seed=seed,
                 )
 
                 # Log token usage

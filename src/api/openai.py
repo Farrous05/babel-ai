@@ -31,6 +31,7 @@ def openai_request(
     presence_penalty: float = 0.0,
     top_p: float = 1.0,
     max_tokens: Optional[int] = None,
+    seed: Optional[int] = None,
 ) -> LLMResponse:
     """
     Send a request to the OpenAI API using the specified GPT-4 model.
@@ -71,6 +72,7 @@ def openai_request(
             presence_penalty=presence_penalty,
             top_p=top_p,
             max_tokens=max_tokens,
+            seed=seed,
         )
         content = response.choices[0].message.content
         logger.info("Successfully received response from OpenAI API")
