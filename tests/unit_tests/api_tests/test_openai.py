@@ -65,6 +65,7 @@ def test_openai_request_success(mock_openai_response, sample_messages):
             presence_penalty=0.0,
             top_p=1.0,
             max_tokens=100,
+            seed=None,
         )
 
 
@@ -111,4 +112,5 @@ def test_default_parameters(sample_messages):
             presence_penalty=0.0,
             top_p=1.0,
             max_tokens=None,
+            seed=None,
         )

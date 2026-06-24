@@ -809,6 +809,7 @@ class TestMetric:
             "lexical_similarity_window": None,
             "semantic_similarity_window": None,
             "token_perplexity": None,
+            "version_b_distance": None,
         }
 
     def test_metric_to_dict_no_analysis(self):
@@ -962,6 +963,7 @@ class TestAgentMetric:
             "frequency_penalty": 0.0,
             "presence_penalty": 0.0,
             "top_p": 1.0,
+            "seed": None,
         }
 
 

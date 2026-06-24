@@ -95,6 +95,7 @@ class TestAgent:
             frequency_penalty=0.2,
             presence_penalty=0.1,
             top_p=0.9,
+            seed=None,
         )
 
     @patch("babel_ai.agent.LLMInterface.generate_response")
@@ -132,6 +133,7 @@ class TestAgent:
             frequency_penalty=0.0,
             presence_penalty=0.0,
             top_p=1.0,
+            seed=None,
         )
 
     @patch("babel_ai.agent.LLMInterface.generate_response")
@@ -165,6 +167,7 @@ class TestAgent:
             frequency_penalty=0.0,
             presence_penalty=0.0,
             top_p=1.0,
+            seed=None,
         )
 
     def test_define_msg_tree_empty_list(self):

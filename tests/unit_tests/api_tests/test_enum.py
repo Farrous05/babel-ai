@@ -8,6 +8,7 @@ from api.enums import (
     AnthropicModels,
     APIModels,
     AzureModels,
+    OllamaCompanyModels,
     OllamaModels,
     OpenAIModels,
     Provider,
@@ -76,7 +77,7 @@ def test_ollama_model_enum():
 
 def test_azure_model_enum():
     """Test AzureModel enum values."""
-    assert AzureModels.GPT4O_2024_08_06.value == "azure-gpt-4o-2024-08-06"
+    assert AzureModels.GPT4O_2024_08_06.value == "gpt-4o-2024-08-06"
 
 
 def test_anthropic_model_enum():
@@ -98,7 +99,13 @@ def test_anthropic_model_enum():
 def test_model_type_contains_all_model_enums():
     """Test ModelType union contains all expected model enum classes."""
     model_types = get_args(APIModels)
-    expected_types = {OpenAIModels, OllamaModels, AzureModels, AnthropicModels}
+    expected_types = {
+        OpenAIModels,
+        OllamaModels,
+        OllamaCompanyModels,
+        AzureModels,
+        AnthropicModels,
+    }
     assert set(model_types) == expected_types
 
 

@@ -15,6 +15,7 @@ from babel_ai.prompt_fetcher import BasePromptFetcher
 from models import (
     AgentConfig,
     AgentMetric,
+    AnalysisResult,
     AnalyzerConfig,
     ExperimentConfig,
     ExperimentMetadata,
@@ -86,6 +87,12 @@ def sample_messages():
 def mock_analyzer():
     """Create a mock analyzer."""
     analyzer = Mock(spec=Analyzer)
+    # Honor the analyzer contract: analyze() returns an AnalysisResult.
+    # Similarity fields are left None so the online collapse detector cleanly
+    # skips them (these tests exercise loop mechanics, not collapse).
+    analyzer.analyze.return_value = AnalysisResult(
+        word_count=0, unique_word_count=0, coherence_score=0.0
+    )
     return analyzer
 
 
@@ -367,11 +374,10 @@ class TestExperiment:
         experiment = Experiment(sample_experiment_config)
 
         # Mock the methods called by run
-        with patch.object(
-            experiment, "run_interaction_loop"
-        ) as mock_generate, patch.object(
-            experiment, "_save_results_to_csv"
-        ) as mock_save:
+        with (
+            patch.object(experiment, "run_interaction_loop") as mock_generate,
+            patch.object(experiment, "_save_results_to_csv") as mock_save,
+        ):
 
             mock_generate.return_value = []
             results = experiment.run()
@@ -409,11 +415,10 @@ class TestExperiment:
         custom_output_dir = Path("/custom/test/path")
 
         # Mock the methods called by run
-        with patch.object(
-            experiment, "run_interaction_loop"
-        ) as mock_generate, patch.object(
-            experiment, "_save_results_to_csv"
-        ) as mock_save:
+        with (
+            patch.object(experiment, "run_interaction_loop") as mock_generate,
+            patch.object(experiment, "_save_results_to_csv") as mock_save,
+        ):
 
             mock_generate.return_value = []
             experiment.run(output_dir=custom_output_dir)
