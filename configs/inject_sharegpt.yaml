@@ -1,0 +1,39 @@
+# Same short-turn collapse setup as collapse_sharegpt_short.yaml, plus a
+# post-collapse injection (spec step 3). The first time the collapse detector
+# fires, one off-topic real-text sentence (with the <end> marker) is appended
+# to the model's last output and fed back as the next input. The injected span
+# is tagged and excluded from scoring; the injection is logged to the run's
+# _meta.json under "injection".
+
+fetcher_config:
+  fetcher: "sharegpt"
+  data_path: "data/sharegpt_real.json"
+  min_messages: 2
+  max_messages: 6
+
+analyzer_config:
+  analyzer: "similarity"
+  analyze_window: 10
+
+agent_configs:
+  - provider: "openai"
+    model: "gpt-4o-mini"
+    system_prompt: "You are a helpful assistant in a conversation. Reply in at most 3 sentences, and always finish your final sentence."
+    temperature: 0.2
+    max_tokens: 150
+    frequency_penalty: 0.0
+    presence_penalty: 0.0
+    top_p: 1.0
+
+agent_selection_method: "round_robin"
+
+max_iterations: 60
+max_total_characters: 1000000
+output_dir: "results"
+
+injection_config:
+  size: "sentence"        # word | sentence | paragraph
+  source: "real"          # real | noise
+  use_marker: true        # prepend the <end> marker
+  marker: "<end>"
+  rng_seed: 1             # reproducible injection sampling

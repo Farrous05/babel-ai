@@ -1,0 +1,39 @@
+# Variant of collapse_sharegpt.yaml that forces SHORT, COMPLETE turns.
+#
+# Why: with a plain prompt + a 150/512-token cap, gpt-4o-mini writes long
+# essays that get chopped mid-sentence, so the next turn just continues the
+# previous truncated sentence -- the self-loop degenerates into plain text
+# continuation rather than turn-taking (~25-55% of turns truncated).
+#
+# Fix here: a brevity instruction ("at most 3 sentences, always finish your
+# final sentence") makes each reply end on its own (finish_reason='stop')
+# well under the token cap -> complete utterances, real turn-taking, no
+# continuation artifact. This is the config we calibrate the collapse
+# detector on (Project_spec.md steps 1-2).
+
+fetcher_config:
+  fetcher: "sharegpt"
+  data_path: "data/sharegpt_real.json"   # 400 real ShareGPT conversations
+  min_messages: 2
+  max_messages: 6
+
+analyzer_config:
+  analyzer: "similarity"
+  analyze_window: 10        # W = 10 (spec default sliding window)
+
+agent_configs:
+  - provider: "openai"
+    model: "gpt-4o-mini"
+    system_prompt: "You are a helpful assistant in a conversation. Reply in at most 3 sentences, and always finish your final sentence."
+    temperature: 0.2          # near-deterministic -> easier to collapse
+    max_tokens: 150           # generous headroom; the 3-sentence instruction
+                              # is the binding constraint, not this cap
+    frequency_penalty: 0.0    # do NOT discourage repetition
+    presence_penalty: 0.0
+    top_p: 1.0
+
+agent_selection_method: "round_robin"
+
+max_iterations: 60
+max_total_characters: 1000000
+output_dir: "results"

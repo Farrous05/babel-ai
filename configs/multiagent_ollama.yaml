@@ -1,0 +1,43 @@
+# Multi-agent self-loop on the company Ollama endpoint (post-v1 extension).
+#
+# Two DIFFERENT models take turns (round-robin), each reading the other's
+# output -- the Maiti et al. style two-model setup. The collapse detector,
+# injection, and recovery evaluation all work unchanged on multi-agent runs
+# (they operate per round, regardless of which agent produced the turn).
+#
+# Prereqs:
+#   1. Set OLLAMA_COMPANY_BASE_URL and OLLAMA_COMPANY_API_KEY in .env
+#      (see .env_example).
+#   2. Pull both models on the endpoint first (Ollama requires a pull).
+#   3. Adjust the model IDs below to ones you have pulled
+#      (see OllamaCompanyModels in src/api/enums.py).
+
+fetcher_config:
+  fetcher: "sharegpt"
+  data_path: "data/sharegpt_real.json"
+  min_messages: 2
+  max_messages: 6
+
+analyzer_config:
+  analyzer: "similarity"
+  analyze_window: 10
+
+agent_configs:
+  - provider: "ollama_company"
+    model: "gpt-oss:120b"
+    system_prompt: "You are a helpful assistant in a conversation. Reply in at most 3 sentences, and always finish your final sentence."
+    temperature: 0.2
+    max_tokens: 150
+    top_p: 1.0
+  - provider: "ollama_company"
+    model: "gpt-oss:20b"
+    system_prompt: "You are a helpful assistant in a conversation. Reply in at most 3 sentences, and always finish your final sentence."
+    temperature: 0.2
+    max_tokens: 150
+    top_p: 1.0
+
+agent_selection_method: "round_robin"
+
+max_iterations: 60
+max_total_characters: 1000000
+output_dir: "results"

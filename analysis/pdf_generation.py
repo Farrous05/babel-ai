@@ -26,6 +26,7 @@ import textwrap
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from xml.sax.saxutils import escape as xml_escape
 
 import numpy as np
 import pandas as pd
@@ -309,7 +310,8 @@ class TheaterScriptPDFGenerator:
                 if field in metadata:
                     story.append(
                         Paragraph(
-                            f"<b>{label}:</b> {metadata[field]}",
+                            f"<b>{label}:</b> "
+                            f"{xml_escape(str(metadata[field]))}",
                             self.metadata_style,
                         )
                     )
@@ -328,7 +330,9 @@ class TheaterScriptPDFGenerator:
                 for key, value in config.items():
                     story.append(
                         Paragraph(
-                            f"&nbsp;&nbsp;&nbsp;&nbsp;<b>{key}:</b> {value}",
+                            "&nbsp;&nbsp;&nbsp;&nbsp;<b>"
+                            f"{xml_escape(str(key))}:</b> "
+                            f"{xml_escape(str(value))}",
                             self.metadata_style,
                         )
                     )
@@ -357,7 +361,7 @@ class TheaterScriptPDFGenerator:
             )
 
             for line in wrapped_json.split("\n"):
-                story.append(Paragraph(line, json_style))
+                story.append(Paragraph(xml_escape(line), json_style))
 
             story.append(PageBreak())
 
@@ -368,7 +372,9 @@ class TheaterScriptPDFGenerator:
             logger.error(f"Failed to create metadata section: {e}")
             raise
 
-    def create_conversation_section(self, df: pd.DataFrame) -> List:
+    def create_conversation_section(
+        self, df: pd.DataFrame, injection: Optional[Dict[str, Any]] = None
+    ) -> List:
         """
         Create the main conversation section in theater script format.
 
@@ -423,7 +429,9 @@ class TheaterScriptPDFGenerator:
                 # Character name
                 character_name = self.format_character_name(row["role"])
                 story.append(
-                    Paragraph(f"{character_name}:", self.character_style)
+                    Paragraph(
+                        f"{xml_escape(character_name)}:", self.character_style
+                    )
                 )
 
                 # Dialog
@@ -444,14 +452,35 @@ class TheaterScriptPDFGenerator:
                 for para in paragraphs:
                     if para.strip():
                         story.append(
-                            Paragraph(para.strip(), self.dialog_style)
+                            Paragraph(
+                                xml_escape(para.strip()), self.dialog_style
+                            )
                         )
 
                 # Add iteration info as stage direction
                 stage_info = (
                     f"(Iteration {row['iteration']}, " f"{row['timestamp']})"
                 )
-                story.append(Paragraph(stage_info, self.stage_direction_style))
+                story.append(
+                    Paragraph(
+                        xml_escape(stage_info), self.stage_direction_style
+                    )
+                )
+
+                # Mark where the injection was appended to this turn's output.
+                if injection and row["iteration"] == injection["iteration"]:
+                    story.append(Spacer(1, 6))
+                    story.append(
+                        Paragraph(
+                            "<b>&gt;&gt;&gt; INJECTION HERE "
+                            f"({xml_escape(str(injection['size']))}/"
+                            f"{xml_escape(str(injection['source']))}, appended "
+                            "to the above output and fed back as the next "
+                            "input; excluded from scoring):</b> "
+                            f"{xml_escape(str(injection['text']))}",
+                            self.stage_direction_style,
+                        )
+                    )
 
                 story.append(Spacer(1, 15))
 
@@ -552,7 +581,8 @@ class TheaterScriptPDFGenerator:
             for role, count in role_counts.items():
                 story.append(
                     Paragraph(
-                        f"{role}: {count} responses", self.metadata_style
+                        f"{xml_escape(str(role))}: {count} responses",
+                        self.metadata_style,
                     )
                 )
 
@@ -573,7 +603,7 @@ class TheaterScriptPDFGenerator:
                         std_val = df[col].std()
                         story.append(
                             Paragraph(
-                                f"{col}: Mean={mean_val:.3f}, "
+                                f"{xml_escape(str(col))}: Mean={mean_val:.3f}, "
                                 f"Std={std_val:.3f}",
                                 self.metadata_style,
                             )
@@ -842,9 +872,23 @@ class TheaterScriptPDFGenerator:
             logger.debug("Building PDF story sections")
             story = []
 
+            # Resolve the injection marker (if any) into a CSV iteration.
+            # Injection round is in agent-round frame (0 = first self-loop
+            # turn); CSV iteration adds the fetcher seed message count.
+            injection = None
+            inj = metadata.get("injection")
+            if inj and inj.get("round") is not None:
+                n_fetch = metadata.get("num_fetcher_messages") or 0
+                injection = {
+                    "iteration": n_fetch + inj["round"],
+                    "text": inj.get("text", ""),
+                    "size": inj.get("size", ""),
+                    "source": inj.get("source", ""),
+                }
+
             # Add sections
             story.extend(self.create_metadata_section(metadata))
-            story.extend(self.create_conversation_section(df))
+            story.extend(self.create_conversation_section(df, injection))
             story.extend(
                 self.create_analysis_section(df, include_table=include_table)
             )

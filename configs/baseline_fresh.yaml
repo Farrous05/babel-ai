@@ -1,0 +1,47 @@
+# Fresh-run injection baseline (spec step 5).
+#
+# Same injection as inject_sharegpt.yaml, but applied at a FIXED early round
+# (before any collapse) instead of after collapse. This injects the identical
+# text into a run that has NOT collapsed, to test whether the recovery seen in
+# the real intervention is the model genuinely recovering, or just the injected
+# text being diverse on its own. The gap between this baseline and the
+# collapsed-run intervention is the core result.
+#
+# The other baseline -- "no intervention" -- is simply collapse_sharegpt_short
+# .yaml (no injection_config); its spontaneous-recovery floor is evaluated
+# automatically when the run collapses.
+
+fetcher_config:
+  fetcher: "sharegpt"
+  data_path: "data/sharegpt_real.json"
+  min_messages: 2
+  max_messages: 6
+
+analyzer_config:
+  analyzer: "similarity"
+  analyze_window: 10
+
+agent_configs:
+  - provider: "openai"
+    model: "gpt-4o-mini"
+    system_prompt: "You are a helpful assistant in a conversation. Reply in at most 3 sentences, and always finish your final sentence."
+    temperature: 0.2
+    max_tokens: 150
+    frequency_penalty: 0.0
+    presence_penalty: 0.0
+    top_p: 1.0
+
+agent_selection_method: "round_robin"
+
+max_iterations: 60
+max_total_characters: 1000000
+output_dir: "results"
+
+injection_config:
+  size: "sentence"
+  source: "real"
+  trigger: "fixed_round"   # inject regardless of collapse...
+  fixed_round: 5           # ...at round 5, before collapse can occur
+  use_marker: true
+  marker: "<end>"
+  rng_seed: 1

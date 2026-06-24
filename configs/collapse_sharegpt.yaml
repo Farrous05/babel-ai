@@ -1,0 +1,32 @@
+# Single-agent self-loop, seeded from a real ShareGPT conversation, tuned to
+# trigger repetition-collapse so we can calibrate the collapse detector
+# (Project_spec.md steps 1-2). Low temperature + zero frequency/presence
+# penalty + many turns => the model should start looping the same phrasing:
+# semantic_similarity -> high (cosine distance -> low), coherence -> low.
+# Short seed (min/max messages) so most of the 60 rounds are pure self-loop.
+
+fetcher_config:
+  fetcher: "sharegpt"
+  data_path: "data/sharegpt_real.json"   # 400 real ShareGPT conversations
+  min_messages: 2
+  max_messages: 6
+
+analyzer_config:
+  analyzer: "similarity"
+  analyze_window: 10        # W = 10 (spec default sliding window)
+
+agent_configs:
+  - provider: "openai"
+    model: "gpt-4o-mini"
+    system_prompt: "You are a helpful assistant participating in a conversation."
+    temperature: 0.2          # near-deterministic -> easier to collapse
+    max_tokens: 150
+    frequency_penalty: 0.0    # do NOT discourage repetition
+    presence_penalty: 0.0
+    top_p: 1.0
+
+agent_selection_method: "round_robin"
+
+max_iterations: 60
+max_total_characters: 1000000
+output_dir: "results"
