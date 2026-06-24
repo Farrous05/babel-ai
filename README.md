@@ -1,131 +1,125 @@
-# babel-ai
+# babel-ai — collapse & recovery in self-looping LLMs
 
-A research framework for analyzing long-term behavior and drift patterns in Large Language Models (LLMs) during self-loop conversations without external input.
+> A research fork of [babel-ai](https://github.com/) — the upstream framework
+> studies long-term behaviour and drift of LLMs talking to themselves. **This
+> fork takes a specific direction:** characterising how a self-looping LLM
+> *collapses* into repetition, and what happens when we *inject* off-topic text
+> to knock it out.
 
-## Overview
+## What this fork studies
 
-This project investigates whether AIs need external input to create sensible output and explores the importance of human interaction for AI performance. It analyzes how AI interaction can be made more diverse without external input and what productive input patterns look like.
+An LLM fed its own output in a loop converges into repetition (a "collapse").
+We:
+
+1. **Detect collapse** online — windowed cosine distance below a cutoff for K
+   consecutive rounds (calibrated; see [doc/metrics_and_collapse.md](doc/metrics_and_collapse.md)).
+2. **Inject** off-topic text once collapse is reached — varying **size** (word
+   / sentence / paragraph) and **source** (real text vs. shuffled noise), with
+   an `<end>` marker and the injected span excluded from scoring. Injection can
+   fire **once** or **repeatedly** (re-inject on each re-collapse, or on a fixed
+   interval).
+3. **Measure the response** with the spec's metrics (version-(b) cosine distance
+   from the collapsed window, Jaccard distance to the injection, perplexity) and
+   label the behaviour: *ignore / parrot / gibberish / blend / escape*.
+
+The approach is grounded in three papers (Maiti et al.; Kong/Lai/Piao/Evans;
+Shumailov et al.) — see [doc/references.md](doc/references.md) for how each
+shapes our methods.
 
 ## Quick Start
 
 ### Installation
 
-1. **Prerequisites**: Python 3.13+ and Poetry
-
-   **Install Poetry if needed**:
-   ```bash
-   # Official installer (recommended)
-   curl -sSL https://install.python-poetry.org | python3 -
-
-   # Or via pip
-   pip install --user poetry
-
-   # Or via Homebrew (macOS)
-   brew install poetry
-   ```
-
-2. **Clone and install**:
-   ```bash
-   # Clone the repository
-   git clone <repository-url>
-   cd babel_ai
-
-   # Install dependencies using Poetry
-   poetry install
-
-   # Activate the virtual environment
-   poetry shell
-   ```
-
-3. **Set up environment** (optional):
-   ```bash
-   # Create .env file for API keys if using external LLM providers
-   cp .env.example .env  # Edit with your API keys
-   ```
-
-### Running Tests
+**Prerequisites:** Python 3.13+ and Poetry.
 
 ```bash
-# Run all tests
-poetry run pytest
-
-# Run with coverage
-poetry run coverage run --source=src -m pytest
-poetry run coverage report
-
-# Run specific test categories
-poetry run pytest tests/unit_tests/     # Unit tests only
-poetry run pytest tests/integration/   # Integration tests only
+git clone <repository-url>
+cd babel_ai
+poetry install
+poetry shell
 ```
 
-### Quick Experiment
+**Environment** (for external providers): copy `.env_example` to `.env` and add
+your API keys.
 
-1. **Basic experiment**:
-   ```bash
-   # Run with the provided test configuration
-   poetry run python src/main.py configs/test_config.yaml
-   ```
+### Running an experiment
 
-2. **Custom experiment**:
-   ```bash
-   # Create your own config file (see configs/test_config.yaml as template)
-   poetry run python src/main.py your_config.yaml --debug
-   ```
+```bash
+# Single run from a YAML config
+poetry run python src/main.py configs/collapse_sharegpt.yaml
 
-3. **View results**:
-   - Results saved to `results/` directory as CSV and JSON files
-   - Use notebooks in `notebooks/` for analysis and visualization
+# Temperature-sweep grid (size × source × temperature × seeds)
+poetry run python analysis/run_grid.py --seeds 3 --temps 0.5,0.7,1.0
 
-**For detailed experiment configuration, multi-agent setups, and analysis workflows, see [doc/experiments.md](doc/experiments.md).**
+# Long run with repeated injection (two cadences, free generation)
+poetry run python analysis/run_longrun.py --mode both --rounds 150
+```
 
-## Key Features
+Results are written per-run under `results/` (CSV conversation + JSON metadata
++ PDF), which is gitignored.
 
-- **Multi-Provider Support**: OpenAI, Anthropic, Azure OpenAI, Ollama
-- **Drift Analysis**: Semantic similarity, lexical analysis, perplexity metrics
-- **Data Sources**: ShareGPT, Topical Chat, Infinite Conversation datasets
-- **Configurable Experiments**: YAML-based configuration system
-- **Analysis Notebooks**: Jupyter notebooks for result visualization
-- **Comprehensive Testing**: Unit and integration test suites
+### Analysis
 
-## Project Structure
+```bash
+# Recovery-rate tables (by size × source, per temperature)
+poetry run python analysis/aggregate_grid.py --csv results/grid/grid_sweep_no_t0.csv
+
+# Injection-behaviour analysis (ignore/parrot/gibberish/blend/escape)
+poetry run python analysis/injection_behavior.py
+```
+
+### Tests
+
+```bash
+poetry run pytest tests/unit_tests/
+```
+
+## Key components
+
+- **Collapse detector** ([src/babel_ai/collapse.py](src/babel_ai/collapse.py)) —
+  online windowed-cosine threshold rule; logs onset round + rate.
+- **Injection module** ([src/babel_ai/injection.py](src/babel_ai/injection.py)) —
+  size × source, `<end>` marker, span-tagging, distance, far-off-topic sampling.
+- **Recovery evaluation** ([src/babel_ai/recovery.py](src/babel_ai/recovery.py)) —
+  did it move away from the attractor, stay sane, and not parrot the injection?
+- **Experiment orchestrator** ([src/babel_ai/experiment.py](src/babel_ai/experiment.py)) —
+  self-loop (last-message feeding), online scoring, one-shot/repeated injection.
+- **Analysis** ([analysis/](analysis/)) — grid sweep, aggregation, behaviour
+  analysis, long-run runner, calibration.
+- **Providers** ([src/api/](src/api/)) — OpenAI, Anthropic, Azure OpenAI, Ollama
+  (incl. an OpenAI-compatible endpoint for multi-agent runs).
+
+## Project structure
 
 ```
 babel_ai/
 ├── src/
-│   ├── babel_ai/          # Core experiment framework
+│   ├── babel_ai/          # core: experiment, collapse, injection, recovery, analyzer
 │   ├── api/               # LLM provider interfaces
-│   ├── models/            # Data models and configurations
-│   └── main.py            # Main experiment runner
-├── tests/                 # Test suites
-├── notebooks/             # Analysis and visualization
-├── configs/               # Experiment configurations
-├── doc/                   # Detailed documentation
-└── data/                  # Datasets (not included)
+│   ├── models/            # Pydantic configs + metric models
+│   └── main.py            # YAML-config experiment runner
+├── analysis/              # grid sweep, aggregation, behaviour analysis, long-run
+├── configs/               # experiment configurations (YAML)
+├── tests/                 # unit tests
+├── doc/                   # documentation (metrics, methodology, references)
+└── data/                  # datasets (not included)
 ```
-
-## Contributing
-
-We welcome contributions! Please see [doc/contributing.md](doc/contributing.md) for detailed guidelines including:
-- Code style and formatting (Black, 79-char limit)
-- Testing requirements (pytest, coverage)
-- Development workflow
-- Adding new analyzers, fetchers, or providers
 
 ## Documentation
 
-- **[Module Guide](doc/modules.md)**: Detailed explanation of core modules
-- **[Experiments Guide](doc/experiments.md)**: How to run experiments and use notebooks
-- **[Directory Structure](doc/directory-structure.md)**: Complete project organization
-- **[Contributing Guide](doc/contributing.md)**: Development guidelines
+- **[Metrics & collapse](doc/metrics_and_collapse.md)** — metric definitions and
+  the exact collapse rule.
+- **[Methodology notes](doc/methodology_notes.md)** — paper coherence and key
+  design decisions.
+- **[Observations log](doc/observations_log.md)** — dated empirical findings.
+- **[References](doc/references.md)** — the papers this work builds on.
+- **[How to run experiments](doc/how_to_run_experiments.md)** ·
+  **[Contributing](doc/contributing.md)** · **[Codebase map](doc/mental_map.md)**
+
+## Style
+
+Black / isort (79-char), Pydantic configs, Poetry, pytest.
 
 ## License
 
 [LICENSE](LICENSE)
-
-## Research Context
-
-This project explores fundamental questions about AI behavior:
-- Do AIs require external input for coherent output?
-- How important is human interaction for AI performance?
-- Can AI interaction diversity be improved without external input?
-- What input patterns are most productive for AI systems?
