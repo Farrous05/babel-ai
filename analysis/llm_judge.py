@@ -31,29 +31,48 @@ sys.path.insert(0, "src")
 from api.enums import OpenAIModels  # noqa: E402
 from api.openai import openai_request  # noqa: E402
 
-JUDGE_MODEL = OpenAIModels.GPT4O_MINI
+JUDGE_MODEL = OpenAIModels.GPT4O
+
+# Calibrated against human labels (2026-06-29, 10 windows, 90% agreement with
+# the gpt-4o judge + the rubric below). Clear topical/verbatim collapse scores
+# 0.7-0.95; genuinely diverse scores 0.0-0.3; the discourse-borderline (same
+# move, drifting topic) sits at ~0.4 and is genuinely fuzzy. Use 0.5 as the
+# high-confidence cutoff; treat 0.4-0.5 as "uncertain -> human glance".
+COLLAPSE_THRESHOLD = 0.5
 
 _SYSTEM = (
-    "You are an expert conversation analyst. You decide whether an AI talking "
-    "to itself has collapsed into a repetitive PATTERN."
+    "You are a strict conversation analyst detecting whether an AI talking to "
+    "itself has collapsed into repetition. Score decisively, using the full "
+    "0.0-1.0 range -- do not bunch everything in the middle."
 )
 
-_PROMPT = """Below are {n} consecutive turns from an AI talking to itself.
+_PROMPT = """Below are {n} consecutive turns from an AI talking to itself. \
+Decide how COLLAPSED they are -- how much the AI is just repeating itself \
+rather than genuinely progressing.
 
-IGNORE whether the topic changes. A conversation can roam across many topics \
-and still be COLLAPSED if every turn makes the SAME conversational move -- for \
-example: always "enthusiastically praise the other and build on their idea", \
-always restating the same point in new words, or always the same \
-question->answer->affirm shape. Genuine progress means each turn does \
-something structurally new (a real disagreement, a new kind of contribution, a \
-shift in stance), not just a new topic in the same template.
+IGNORE topic changes. A conversation can hop across many topics and still be \
+collapsed. What matters is whether each turn does something STRUCTURALLY NEW:
 
-Judge whether these turns are stuck in one repetitive conversational pattern.
+- PROGRESS (low score): a turn adds a new claim, a disagreement, a question, \
+new information, or a real shift in stance.
+- REPETITION (high score): a turn reuses the same wording, OR makes the same \
+conversational move every time (e.g. "enthusiastically affirm the other + \
+build on their idea"), OR restates the same point in new words. Warm framing \
+alone ("I'm glad/excited/thrilled...") is NOT progress.
+
+Use the FULL range and be decisive:
+- 0.9-1.0: near-verbatim / near-identical turns (the same sentences or \
+structure recur with tiny edits), or every turn the exact same move with no \
+new substance.
+- 0.6-0.8: clearly the same template/move each turn, even though the topic or \
+wording varies (discourse-level loop).
+- 0.3-0.5: mostly progressing, with some repetition.
+- 0.0-0.2: genuinely varied -- different kinds of moves and real new content \
+each turn.
 
 Respond with ONLY this JSON (no prose):
-{{"score": <float 0.0-1.0, where 1.0 = every turn is the same move>, \
-"repetitive": <true|false>, "pattern": "<short description of the repeated \
-move, or 'none'>"}}
+{{"score": <float 0.0-1.0>, "repetitive": <true|false>, \
+"pattern": "<short description of the repeated move, or 'none'>"}}
 
 TURNS:
 {turns}"""
@@ -141,10 +160,11 @@ def main() -> None:
         )
     if scores:
         mean = sum(scores) / len(scores)
-        frac = sum(1 for s in scores if s >= 0.6) / len(scores)
+        frac = sum(1 for s in scores if s >= COLLAPSE_THRESHOLD) / len(scores)
         print(
             f"\nOVERALL: mean score={mean:.2f}, "
-            f"{frac * 100:.0f}% of windows judged repetitive (score>=0.6)"
+            f"{frac * 100:.0f}% of windows collapsed "
+            f"(score>={COLLAPSE_THRESHOLD})"
         )
 
 
