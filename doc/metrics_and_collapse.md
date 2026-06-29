@@ -20,10 +20,14 @@ early runs (see §5).
 Each generated turn is scored against the conversation so far. Two fixed
 reference models are used and held constant across every run:
 
-- **Embedding model**: `all-MiniLM-L6-v2` (Sentence-BERT) — for semantic
-  similarity.
+- **Embedding model**: OpenAI **`text-embedding-3-large`** — for semantic
+  similarity. Chosen to match the Multi-LLM paper and because its 8191-token
+  context embeds *whole* turns; the earlier `all-MiniLM-L6-v2` (Sentence-BERT)
+  truncated at 256 tokens, so on our 300–1000-word free-generation turns it
+  only "saw" each turn's opening. Implemented as a drop-in in
+  [`embeddings.py`](../src/babel_ai/embeddings.py) (same `.encode()` interface).
 - **Perplexity reference model**: `gpt2` — a *separate* model from the loop
-  model (`gpt-4o-mini`), so perplexity is an independent quality judge.
+  model, so perplexity is an independent quality judge.
 
 | Metric (CSV key)            | Range        | One-line meaning |
 |-----------------------------|--------------|------------------|
