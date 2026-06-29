@@ -150,6 +150,10 @@ class OllamaCompanyModels(Enum):
 
     GPT_OSS_120B = "gpt-oss:120b"
     GPT_OSS_20B = "gpt-oss:20b"
+    # vLLM serves by HuggingFace repo ID -- the value must equal the endpoint's
+    # `--model=` argument exactly.
+    LLAMA_3_70B = "meta-llama/Meta-Llama-3-70B-Instruct"
+    LLAMA_3_3_70B = "meta-llama/Llama-3.3-70B-Instruct"
 
 
 class AzureModels(Enum):

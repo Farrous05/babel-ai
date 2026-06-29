@@ -317,7 +317,7 @@ class Experiment:
                     == InjectionTrigger.AFTER_COLLAPSE
                     and self.injection_config.repeat
                 ):
-                    self.collapse_detector.rearm()
+                    self.collapse_detector.rearm(agent_round)
 
             # log agent metric
             logger.debug(
@@ -408,8 +408,11 @@ class Experiment:
         - ``fixed_round``: once, at the configured round.
         - ``fixed_interval``: every ``interval`` rounds (steady dosing).
         - ``after_collapse``: when collapse is declared; once by default, or on
-          each *re-collapse* when ``repeat`` is set (with a ``window``-round
-          cooldown so the windowed metric isn't double-counting the same dip).
+          each *re-collapse* when ``repeat`` is set. Re-collapse cadence is now
+          governed by the detector's **hysteresis** re-arm (it can only declare
+          a new collapse after the loop has visibly left the attractor), so no
+          time-based cooldown is needed here -- ``collapsed`` simply cannot be
+          True again until a genuine new collapse has formed.
         """
         cfg = self.injection_config
         trigger = cfg.trigger
@@ -427,12 +430,6 @@ class Experiment:
                 return False
             if not cfg.repeat:
                 return not self._injection_rounds
-            cooldown = self.collapse_detector.config.window
-            if (
-                self._last_injection_round is not None
-                and agent_round - self._last_injection_round < cooldown
-            ):
-                return False
             return True
 
         return False

@@ -57,9 +57,12 @@ We have three reference papers in `doc/`:
 
 **What the code does today.** The collapse trigger is the **windowed** cosine
 distance: `1 - mean(cosine(current turn, each of the previous W=10 turns))`,
-required below 0.40 for **K=5** consecutive rounds (after a 10-round warm-up).
-See [analyzer.py](../src/babel_ai/analyzer.py) `_analyze_semantic_similarity`
-and [collapse.py](../src/babel_ai/collapse.py).
+required below 0.40 for **K=3** consecutive rounds (after a 10-round warm-up).
+For *repeated* injection, re-collapse is gated by a **hysteresis** re-arm (the
+windowed distance must first rise above 0.50) rather than a fixed cooldown — see
+[metrics_and_collapse.md](metrics_and_collapse.md). See
+[analyzer.py](../src/babel_ai/analyzer.py) `_analyze_semantic_similarity` and
+[collapse.py](../src/babel_ai/collapse.py).
 
 **How that differs from Maiti.** Maiti thresholds the distance between
 **consecutive** outputs (turn *i* vs *i−1*) and requires 3-in-a-row. We deviate
@@ -120,3 +123,61 @@ exact run to inspect it). For the science, **lean on large N** (cheap on the
 company Ollama), comparing average recovery rates — like the papers. Note: local
 Ollama can be made *truly* deterministic if exact reproduction is ever wanted,
 unlike the hosted OpenAI API. Tracked in future_work §D.
+
+---
+
+## 5. Open idea — a novelty check to separate "productive deep-dive" from "loop"
+
+**The limitation.** Our primary signal is *semantic similarity* (SBERT cosine).
+It measures "how close in meaning is this turn to the recent ones," which is a
+good proxy for collapse but **cannot tell apart two on-topic cases**: (a) a
+discussion that keeps adding *new* claims on one topic (productive), and (b) one
+that keeps *rephrasing the same* claim (a loop). Both look similar to the
+previous turn, so a narrow-but-genuinely-progressing discussion could be
+mislabelled as collapse.
+
+**Why it doesn't bite us now.** In a **single-model self-loop** there is no
+source of new information (no opponent, no human, no retrieval), so the model
+*cannot* sustain a real deep-dive with itself — the gray zone is essentially
+empty, and reading the actual "collapsed" text confirms it is genuine stalling
+(polite re-packaging), not progress. So we are **not** implementing a fix now.
+
+**When to revisit.** As soon as new information can enter each turn — i.e.
+**multi-agent**, human-in-the-loop, or RAG/tool use — the gray zone opens and
+this matters. (The planned bigger-Ollama run is still a self-loop, so still
+safe; multi-agent is the trigger.)
+
+**Cheap fix to reach for first (no new model):** a **lexical-novelty** signal —
+count *new* content-words (or new n-grams) introduced per turn, a cousin of the
+Jaccard we already log. Genuine progression keeps introducing new vocabulary;
+rephrasing does not. Only escalate to a full **NLI/entailment** check ("does this
+turn assert something not entailed by the previous one?") if lexical novelty and
+a human read disagree. The spec already lists NLI as the planned upgrade "if
+perplexity proves too blunt."
+
+---
+
+## 6. Early temp×size sweep observation vs. Multi_LLM's noise-injection result (2026-06-25)
+
+**Observation.** In the first 6 of 9 temp×size sweep runs (GPT-4o-mini, single
+seed), a bigger/more disruptive injection dose (`OUTPUT_SIZED`, `SKIM_HALF`)
+does not buy more *lasting* recovery than a plain `PARAGRAPH` dose — every
+injected run re-collapses in roughly 9–11 rounds regardless of dose size.
+
+**Why this is not surprising — it matches Multi_LLM directly.** Their
+Extended Data Figure 1b (periodic noise injection) reports: *"Although both
+within-run and cross-run semantic diversity are temporarily perturbed in
+early windows, they rapidly return to baseline levels. Over time, the system
+exhibits decreasing sensitivity to the injected noise."* Their Extended Data
+Table 1 shows the `PERTURBATION GPT random_noise` coefficient is not
+significant (raw p ≈ 0.26) — notably the **same model family** (GPT-4o-mini)
+as our setup. Their headline finding is that **all twelve** intervention
+strategies, including ones manipulating decoding temperature and output
+length, failed to produce a lasting, significant increase in semantic
+diversity: the system returns to its attractor regardless of how hard it is
+perturbed.
+
+**Caveat.** Our observation is 6 runs, one model, one seed, 30 rounds —
+suggestive, not yet evidence, vs. their 62 corrected comparisons across 3
+model families over 200–1000 rounds. Treat the alignment as a sanity check
+that we're not seeing something paper-contradicting, not as confirmation.

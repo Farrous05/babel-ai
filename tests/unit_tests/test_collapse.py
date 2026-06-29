@@ -33,6 +33,7 @@ def test_default_config_matches_locked_constants():
     assert cfg.cosine_cutoff == 0.40
     assert cfg.jaccard_cutoff == 0.40
     assert cfg.warmup == 10
+    assert cfg.rearm_cutoff == 0.50  # hysteresis upper threshold (> cutoff)
 
 
 def test_collapse_declared_after_persistence():
@@ -101,18 +102,28 @@ def test_custom_config_thresholds():
     assert det.onset_round == 3  # rounds 1,2,3
 
 
-def test_rearm_allows_a_second_collapse():
-    """After rearm(), the detector clears its onset/streak so a *new* collapse
-    can be declared (used for repeated post-collapse injection)."""
-    det = _detector()
+def test_rearm_requires_recovery_before_second_collapse():
+    """Hysteresis: after rearm() the detector is DISARMED and will not declare a
+    new collapse until the windowed cosine distance first rises above
+    rearm_cutoff (the loop must visibly leave the attractor). Until then the
+    still-collapsed (contaminated) window is ignored, not re-triggered."""
+    det = _detector()  # rearm_cutoff default 0.50
     _feed(det, [0.9, 0.9, 0.9])  # K=3 -> collapse at round 2
     assert det.collapsed and det.onset_round == 2
-    det.rearm()
+    det.rearm(2)
     assert not det.collapsed and det.onset_round is None
-    # a fresh run of low-distance rounds re-declares collapse
-    for i in range(3, 6):
+    assert det.last_rearm_round == 2
+    # the still-low post-injection window (sim 0.9 -> dist 0.1) must NOT fire a
+    # spurious re-collapse while disarmed:
+    for i in range(3, 7):
         det.update(round_idx=i, semantic_similarity_window=0.9)
-    assert det.collapsed and det.onset_round == 5
+    assert not det.collapsed
+    # recovery: dist 0.8 (> 0.50 rearm_cutoff) re-arms the detector
+    det.update(round_idx=7, semantic_similarity_window=0.2)
+    # now a fresh K-run of low distance re-declares collapse
+    for i in range(8, 11):
+        det.update(round_idx=i, semantic_similarity_window=0.9)
+    assert det.collapsed and det.onset_round == 10
 
 
 def test_warmup_blocks_premature_collapse():

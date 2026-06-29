@@ -144,6 +144,30 @@ Concretely, for this project:
 | Cosine cutoff | **0.40** | windowed cosine *distance* ≤ 0.40 (windowed cosine *similarity* ≥ 0.60) |
 | Jaccard cutoff | **0.40** | windowed Jaccard distance — informational/secondary only |
 | Warm-up | **10** | no collapse declared before this round, so the W-turn window has filled and the windowed signal is trustworthy (avoids premature collapse in the unstable first rounds) |
+| Re-arm cutoff | **0.50** | hysteresis upper threshold for repeated injection (see below) |
+
+### Re-arming after an injection — hysteresis, not a cooldown
+
+For **repeated** injection (re-inject on each re-collapse), the detector must
+decide *when a re-collapse counts*. We use a **Schmitt-trigger / hysteresis**
+rule rather than a fixed time cooldown:
+
+- After an injection the detector is **disarmed**: it will not declare a new
+  collapse until the windowed cosine distance first rises **above the re-arm
+  cutoff (0.50)** — i.e. the loop has visibly left the attractor.
+- Only then can a fresh dip below 0.40 (for K rounds) declare the next collapse.
+
+Why: right after an injection the W-turn window still contains pre-injection
+collapsed turns, so it reads *low*; a plain detector would re-fire off that stale
+dip. The old fix was a fixed `window`-round cooldown, which **hid the true
+re-collapse speed** (it forbade re-detection for ~10 rounds regardless). The
+hysteresis rule replaces it: a re-collapse only counts if the loop *un-collapsed*
+first, with no arbitrary wait — and a contaminated low window simply keeps the
+detector disarmed instead of triggering a false re-collapse. The 0.50 cutoff
+sits above the 0.40 collapse cutoff (forming the hysteresis band) and within the
+observed diverse-start range. Implemented in
+[collapse.py](../src/babel_ai/collapse.py) (`rearm`, `rearm_cutoff`); true
+re-collapse latency is reported separately from the raw turn-to-turn signal.
 
 The cosine cutoff is **0.40**, not the 0.34 first floated: 0.34 came from the
 *turn-to-turn* midpoints, but once the signal moved to *windowed* cosine, the

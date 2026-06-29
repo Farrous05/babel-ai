@@ -35,6 +35,16 @@ class CollapseConfig:
     cosine_cutoff: float = 0.40  # windowed cosine DISTANCE threshold (primary)
     jaccard_cutoff: float = 0.40  # windowed Jaccard DISTANCE (secondary/log)
     warmup: int = 10  # no collapse declared before this round (window fills)
+    # Hysteresis (Schmitt-trigger) re-arm threshold: after a re-collapse is set
+    # up by an injection, the detector will NOT declare a new collapse until the
+    # windowed cosine distance first climbs back ABOVE this value -- i.e. the
+    # loop provably left the attractor. This replaces a fixed time-based
+    # cooldown: a re-collapse only counts if the loop genuinely un-collapsed
+    # first, and the contaminated post-injection window (which still averages in
+    # pre-injection collapsed turns, so reads low) simply keeps the detector
+    # disarmed instead of triggering a false re-collapse. Must be > cosine_cutoff
+    # to form a proper hysteresis band; 0.50 sits in the diverse-start band.
+    rearm_cutoff: float = 0.50
 
 
 @dataclass
@@ -57,6 +67,13 @@ class CollapseDetector:
         self._jac_streak = 0
         self.onset_round: Optional[int] = None
         self.jaccard_onset_round: Optional[int] = None
+        # Hysteresis state: the detector is "armed" (allowed to declare a new
+        # collapse) at the start; after a re-arm following injection it is
+        # disarmed until the windowed cosine distance climbs above rearm_cutoff.
+        self._armed: bool = True
+        # Round at which the detector last re-armed (== the injection round that
+        # triggered it); used to report re-collapse latency.
+        self.last_rearm_round: Optional[int] = None
         # (round, turn-to-turn semantic_similarity) used for the rate slope.
         self._sem_history: List[Tuple[int, float]] = []
 
@@ -65,18 +82,25 @@ class CollapseDetector:
         """Whether collapse has been declared (primary signal)."""
         return self.onset_round is not None
 
-    def rearm(self) -> None:
-        """Reset the collapse state so a *new* collapse can be detected.
+    def rearm(self, round_idx: Optional[int] = None) -> None:
+        """Reset the collapse state so a *new* collapse can be detected, under
+        hysteresis.
 
         Used after a repeated injection: keeps the semantic history (so the
         collapse-rate slope still spans the whole run) but clears the declared
-        onset and the streak counters, so the detector must observe a fresh
-        run of low-distance rounds before declaring collapse again.
+        onset and the streak counters. Crucially it also **disarms** the
+        detector: it will not declare a new collapse until the windowed cosine
+        distance first rises above ``rearm_cutoff`` (the loop must visibly leave
+        the attractor). This is the Schmitt-trigger re-arm that replaces the old
+        fixed cooldown -- no arbitrary wait, and no false re-collapse off the
+        still-contaminated post-injection window.
         """
         self._cos_streak = 0
         self._jac_streak = 0
         self.onset_round = None
         self.jaccard_onset_round = None
+        self._armed = False
+        self.last_rearm_round = round_idx
 
     def update(
         self,
@@ -95,8 +119,25 @@ class CollapseDetector:
         if semantic_similarity is not None:
             self._sem_history.append((round_idx, float(semantic_similarity)))
 
-        # Primary trigger: windowed cosine distance.
-        if semantic_similarity_window is not None:
+        # Hysteresis gate: while disarmed (just after an injection), watch for
+        # the windowed cosine distance to climb above rearm_cutoff -- only then
+        # is the detector allowed to look for a new collapse. The low, still-
+        # contaminated post-injection window keeps us disarmed rather than
+        # triggering a spurious re-collapse, so no time-based cooldown is needed.
+        if not self._armed and semantic_similarity_window is not None:
+            if 1.0 - float(semantic_similarity_window) > self.config.rearm_cutoff:
+                self._armed = True
+                self._cos_streak = 0
+                self._jac_streak = 0
+                logger.info(
+                    "Detector re-armed at round %d (windowed cosine distance "
+                    "rose above %.2f -- loop left the attractor)",
+                    round_idx,
+                    self.config.rearm_cutoff,
+                )
+
+        # Primary trigger: windowed cosine distance. Only counts while armed.
+        if self._armed and semantic_similarity_window is not None:
             cos_dist = 1.0 - float(semantic_similarity_window)
             if cos_dist <= self.config.cosine_cutoff:
                 self._cos_streak += 1
@@ -118,7 +159,7 @@ class CollapseDetector:
                 self._cos_streak = 0
 
         # Secondary signal: windowed Jaccard distance (logged, never a trigger).
-        if lexical_similarity_window is not None:
+        if self._armed and lexical_similarity_window is not None:
             jac_dist = 1.0 - float(lexical_similarity_window)
             if jac_dist <= self.config.jaccard_cutoff:
                 self._jac_streak += 1

@@ -92,6 +92,22 @@ def _sample_snippet(
                 return rng.choice(sents)
         return rng.choice(corpus).strip()
 
+    if size == InjectionSize.MULTI_PARAGRAPH:
+        # A *bigger* dose: gather several paragraphs (≥15 words each) from
+        # across the corpus and concatenate them, blank-line separated.
+        n_target = 4
+        paras: List[str] = []
+        for _ in range(60):
+            for p in _PARAGRAPH_SPLIT.split(rng.choice(corpus)):
+                p = p.strip()
+                if len(p.split()) >= 15:
+                    paras.append(p)
+            if len(paras) >= n_target:
+                break
+        if paras:
+            return "\n\n".join(paras[:n_target])
+        return rng.choice(corpus).strip()
+
     # PARAGRAPH
     for _ in range(20):
         paras = [
@@ -175,6 +191,97 @@ def build_far_injection(
     return best
 
 
+def _ensure_terminal(text: str) -> str:
+    """Guarantee the injection ends on sentence-terminal punctuation, so a
+    self-loop model treats it as a finished utterance to respond to rather than
+    a fragment to continue. Code-only corpus snippets (ending in ``}``, ``)``,
+    ``;``) are the main offenders; we append a period when needed."""
+
+    text = (text or "").rstrip()
+    if text and text[-1] not in ".!?":
+        text += "."
+    return text
+
+
+def _skim_first_half(text: str) -> "tuple[str, int]":
+    """Keep the first half of the output's *whole sentences*; return the kept
+    text and the **word count of the dropped half**. Cutting on a sentence
+    boundary avoids leaving a broken fragment. Falls back to a word-split if the
+    text is a single sentence."""
+
+    sents = [s.strip() for s in _SENTENCE_SPLIT.split(text.strip()) if s.strip()]
+    if len(sents) <= 1:
+        words = text.split()
+        half = len(words) // 2
+        return " ".join(words[:half]), len(words) - half
+    keep_n = max(1, len(sents) // 2)
+    kept = " ".join(sents[:keep_n])
+    dropped_words = len(" ".join(sents[keep_n:]).split())
+    return kept, dropped_words
+
+
+def build_sized_injection(
+    target_words: int,
+    source: InjectionSource,
+    corpus: Sequence[str],
+    window_texts: Sequence[str],
+    num_candidates: int,
+    rng: Optional[random.Random] = None,
+) -> str:
+    """Build an off-topic injection of approximately ``target_words`` words.
+
+    The first chunk is chosen far-off-topic (farthest of ``num_candidates``);
+    further sentences are appended until the target length is reached. The
+    result is accumulated **by whole sentences** and always ends on a sentence
+    boundary -- never a mid-sentence fragment, which a self-loop model would
+    otherwise just *complete* instead of responding to (so the injection would
+    read as a continuation, not an off-topic intervention). Length therefore
+    approximates ``target_words`` (it stops at the first sentence that reaches
+    the target) rather than matching it exactly. Used by OUTPUT_SIZED (target =
+    the model's last output length) and SKIM_HALF (target = the dropped half).
+    """
+
+    rng = rng or random.Random()
+
+    def _sentences(text: str) -> List[str]:
+        # Keep only *complete* sentences -- those that end in terminal
+        # punctuation. The ShareGPT corpus is full of code and clipped snippets
+        # whose tail piece has no '.', '!' or '?'; including such a fragment as
+        # the last line is exactly what makes the self-loop model *continue* it
+        # instead of responding to the injection.
+        return [
+            s.strip()
+            for s in _SENTENCE_SPLIT.split(text)
+            if s.strip() and s.strip()[-1] in ".!?"
+        ]
+
+    # Seed with a far-off-topic paragraph for the distance bias, then keep
+    # adding whole sentences (from fresh paragraphs) until we reach the target.
+    pool = _sentences(
+        build_far_injection(
+            InjectionSize.PARAGRAPH, source, corpus, window_texts,
+            num_candidates, rng=rng,
+        )
+    )
+    out: List[str] = []
+    count = 0
+    guard = 0
+    while count < target_words and guard < 200:
+        if not pool:
+            pool = _sentences(
+                build_injection(InjectionSize.PARAGRAPH, source, corpus, rng=rng)
+            )
+            guard += 1
+            if not pool:  # corpus yielded nothing splittable; bail out
+                break
+        s = pool.pop(0)
+        out.append(s)
+        count += len(s.split())
+    return " ".join(out) if out else build_injection(
+        InjectionSize.PARAGRAPH, source, corpus, rng=rng
+    )
+
+
 def measure_injection_distance(
     injection_text: str, window_texts: Sequence[str]
 ) -> Optional[float]:
@@ -218,10 +325,32 @@ def apply_injection(
     that many sampled candidates (see :func:`build_far_injection`).
     """
 
-    text = build_far_injection(
-        size, source, corpus, window_texts, num_candidates, rng=rng
-    )
-    prefix = last_content
+    rng = rng or random.Random()
+    # `base` is the model text we keep before the injection. For most sizes it
+    # is the full last output (pure append). SKIM_HALF replaces the dropped half
+    # of the output with off-topic text of equal size, so `base` is the kept
+    # first half and the input length stays ≈ one output.
+    base = last_content
+    if size == InjectionSize.OUTPUT_SIZED:
+        target = max(15, len(last_content.split()))
+        text = build_sized_injection(
+            target, source, corpus, window_texts, num_candidates, rng=rng
+        )
+    elif size == InjectionSize.SKIM_HALF:
+        base, dropped_words = _skim_first_half(last_content)
+        text = build_sized_injection(
+            max(15, dropped_words), source, corpus, window_texts,
+            num_candidates, rng=rng,
+        )
+    else:
+        text = build_far_injection(
+            size, source, corpus, window_texts, num_candidates, rng=rng
+        )
+    # Every injection except a bare WORD must read as a finished utterance, so
+    # the loop responds to it instead of completing a dangling fragment.
+    if size != InjectionSize.WORD:
+        text = _ensure_terminal(text)
+    prefix = base
     if use_marker:
         prefix = f"{prefix} {marker} "
     else:

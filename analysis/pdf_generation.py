@@ -373,7 +373,9 @@ class TheaterScriptPDFGenerator:
             raise
 
     def create_conversation_section(
-        self, df: pd.DataFrame, injection: Optional[Dict[str, Any]] = None
+        self,
+        df: pd.DataFrame,
+        injections: Optional[List[Dict[str, Any]]] = None,
     ) -> List:
         """
         Create the main conversation section in theater script format.
@@ -407,25 +409,13 @@ class TheaterScriptPDFGenerator:
             df_sorted = df.sort_values("iteration")
             logger.debug(f"Processing {len(df_sorted)} conversation entries")
 
-            current_scene = 1
+            # Index injections by the CSV iteration they were appended to, so
+            # each can be marked inline (a run may have many).
+            inj_by_iter: Dict[int, List[Dict[str, Any]]] = {}
+            for inj in injections or []:
+                inj_by_iter.setdefault(inj["iteration"], []).append(inj)
 
             for idx, row in df_sorted.iterrows():
-                # Add scene breaks every 20 iterations
-                if row["iteration"] % 20 == 0 and row["iteration"] > 0:
-                    logger.debug(
-                        f"Adding scene break at iteration "
-                        f"{row['iteration']}"
-                    )
-                    story.append(Spacer(1, 20))
-                    story.append(
-                        Paragraph(
-                            f"--- SCENE {current_scene} ---",
-                            self.stage_direction_style,
-                        )
-                    )
-                    story.append(Spacer(1, 20))
-                    current_scene += 1
-
                 # Character name
                 character_name = self.format_character_name(row["role"])
                 story.append(
@@ -467,12 +457,14 @@ class TheaterScriptPDFGenerator:
                     )
                 )
 
-                # Mark where the injection was appended to this turn's output.
-                if injection and row["iteration"] == injection["iteration"]:
+                # Mark every injection appended to this turn's output.
+                for injection in inj_by_iter.get(row["iteration"], []):
                     story.append(Spacer(1, 6))
+                    num = injection.get("index")
+                    label = f"#{num} " if num is not None else ""
                     story.append(
                         Paragraph(
-                            "<b>&gt;&gt;&gt; INJECTION HERE "
+                            f"<b>&gt;&gt;&gt; INJECTION {label}HERE "
                             f"({xml_escape(str(injection['size']))}/"
                             f"{xml_escape(str(injection['source']))}, appended "
                             "to the above output and fed back as the next "
@@ -872,23 +864,32 @@ class TheaterScriptPDFGenerator:
             logger.debug("Building PDF story sections")
             story = []
 
-            # Resolve the injection marker (if any) into a CSV iteration.
-            # Injection round is in agent-round frame (0 = first self-loop
-            # turn); CSV iteration adds the fetcher seed message count.
-            injection = None
-            inj = metadata.get("injection")
-            if inj and inj.get("round") is not None:
-                n_fetch = metadata.get("num_fetcher_messages") or 0
-                injection = {
+            # Resolve every injection into a CSV iteration. Injection round is
+            # in agent-round frame (0 = first self-loop turn); CSV iteration
+            # adds the fetcher seed message count. Supports both the repeated-
+            # injection list (``injections``) and the legacy single field
+            # (``injection``).
+            n_fetch = metadata.get("num_fetcher_messages") or 0
+            raw_injs = metadata.get("injections")
+            if not raw_injs:
+                single = metadata.get("injection")
+                raw_injs = [single] if single else []
+            injections = [
+                {
                     "iteration": n_fetch + inj["round"],
+                    "index": i + 1,
                     "text": inj.get("text", ""),
                     "size": inj.get("size", ""),
                     "source": inj.get("source", ""),
                 }
+                for i, inj in enumerate(raw_injs)
+                if inj and inj.get("round") is not None
+            ]
+            logger.info(f"Marking {len(injections)} injection(s) in the PDF")
 
             # Add sections
             story.extend(self.create_metadata_section(metadata))
-            story.extend(self.create_conversation_section(df, injection))
+            story.extend(self.create_conversation_section(df, injections))
             story.extend(
                 self.create_analysis_section(df, include_table=include_table)
             )

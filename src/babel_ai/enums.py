@@ -140,12 +140,21 @@ class InjectionSize(Enum):
     """Size of the text injected to knock a collapsed loop out of repetition.
 
     WORD: a single word. SENTENCE: one sentence. PARAGRAPH: one paragraph.
-    The independent variable of the v1 experiment.
+    MULTI_PARAGRAPH: several paragraphs concatenated (a fixed bigger dose).
+    OUTPUT_SIZED: off-topic text sized to match the model's *own last output*
+    (a big dose appended -- roughly doubles the input).
+    SKIM_HALF: keep the first half of the output's sentences and *replace* the
+    dropped half with off-topic text of the same word-size (input length stays
+    ≈ one output, but half its content becomes off-topic). The size is the
+    independent variable of the v1 experiment.
     """
 
     WORD = "word"
     SENTENCE = "sentence"
     PARAGRAPH = "paragraph"
+    MULTI_PARAGRAPH = "multi_paragraph"
+    OUTPUT_SIZED = "output_sized"
+    SKIM_HALF = "skim_half"
 
 
 class InjectionSource(Enum):
