@@ -99,6 +99,7 @@ MODELS = {
     "gpt-4o-mini": (Provider.OPENAI, OpenAIModels.GPT4O_MINI),
     "llama-3.3-70b": (Provider.OLLAMA_COMPANY, OllamaCompanyModels.LLAMA_3_3_70B),
     "llama-3-70b": (Provider.OLLAMA_COMPANY, OllamaCompanyModels.LLAMA_3_70B),
+    "qwen-2.5-72b": (Provider.OLLAMA_COMPANY, OllamaCompanyModels.QWEN_2_5_72B),
 }
 
 
@@ -107,10 +108,27 @@ def _config(
     rounds: int,
     temp: float,
     seed: int,
-    model_key: str = "gpt-4o-mini",
+    model_keys: List[str] = ("gpt-4o-mini",),
     system_prompt: Optional[str] = None,
 ) -> ExperimentConfig:
-    provider, model = MODELS[model_key]
+    # One AgentConfig per model_key. A single key => self-loop; two or more =>
+    # a multi-agent conversation (round-robin alternates the agents, each fed
+    # only the previous turn -- so each model responds to the other's message).
+    agents = []
+    for mk in model_keys:
+        provider, model = MODELS[mk]
+        agents.append(
+            AgentConfig(
+                provider=provider,
+                model=model,
+                # None = free generation; a minimal frame stops instruct models
+                # breaking character ("this conversation just started").
+                system_prompt=system_prompt,
+                temperature=temp,
+                max_tokens=2048,  # large cap so turns finish on their own
+                seed=seed,
+            )
+        )
     return ExperimentConfig(
         fetcher_config=FetcherConfig(
             fetcher=FetcherType.SHAREGPT,
@@ -121,28 +139,11 @@ def _config(
         analyzer_config=AnalyzerConfig(
             analyzer=AnalyzerType.SIMILARITY, analyze_window=10
         ),
-        agent_configs=[
-            AgentConfig(
-                provider=provider,
-                model=model,
-                # None = free generation (no prompt); a minimal frame can be
-                # passed to stop instruct models breaking character ("this
-                # conversation just started") under last-message feeding.
-                system_prompt=system_prompt,
-                temperature=temp,
-                # Large cap so turns finish on their own (free generation).
-                # 512 was too low -- gpt-4o-mini's natural unprompted reply is
-                # ~540+ tokens, so it cut nearly every turn mid-sentence and
-                # (with last-message feeding) the next turn continued the
-                # fragment. 2048 lets replies end naturally.
-                max_tokens=2048,
-                seed=seed,
-            )
-        ],
+        agent_configs=agents,
         agent_selection_method=AgentSelectionMethod.ROUND_ROBIN,
         max_iterations=rounds,
         max_total_characters=10**7,  # don't stop the long run early
-        history_window=1,  # feed only the last message (Maiti-style self-loop)
+        history_window=1,  # feed only the last message (Maiti-style)
         output_dir=OUT_DIR,
         injection_config=injection,
     )
@@ -150,7 +151,7 @@ def _config(
 
 def _run_one(
     size: str, rounds: int, temp: float, seed: int,
-    model_key: str = "gpt-4o-mini",
+    model_keys: List[str] = ("gpt-4o-mini",),
     system_prompt: Optional[str] = None,
 ) -> str:
     import random
@@ -158,7 +159,7 @@ def _run_one(
     random.seed(seed)  # fix the fetched seed conversation
     inj = _injection(size, seed=seed)
     exp = Experiment(
-        _config(inj, rounds, temp, seed, model_key, system_prompt)
+        _config(inj, rounds, temp, seed, model_keys, system_prompt)
     )
     exp.run()
     m = exp.metadata
@@ -489,9 +490,8 @@ def main() -> None:
         "--model",
         type=str,
         default="gpt-4o-mini",
-        choices=list(MODELS),
-        help="loop model (llama-3.3-70b / llama-3-70b use the company "
-        "OpenAI-compatible endpoint; creds in .env)",
+        help="comma-separated model keys; one = self-loop, two+ = multi-agent "
+        f"conversation (round-robin). choices: {','.join(MODELS)}",
     )
     ap.add_argument(
         "--system-prompt",
@@ -511,7 +511,15 @@ def main() -> None:
         OUT_DIR, f"batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     )
     os.makedirs(OUT_DIR, exist_ok=True)
-    print(f"[longrun] writing this batch to {OUT_DIR} (model={args.model})")
+
+    model_keys = [m.strip() for m in args.model.split(",") if m.strip()]
+    for mk in model_keys:
+        if mk not in MODELS:
+            raise SystemExit(f"unknown model {mk!r}; choose from {list(MODELS)}")
+    mode = "self-loop" if len(model_keys) == 1 else "multi-agent"
+    print(
+        f"[longrun] batch {OUT_DIR} | {mode}: {'+'.join(model_keys)}"
+    )
 
     sizes = [s.strip() for s in args.sizes.split(",") if s.strip()]
     temps = (
@@ -530,7 +538,7 @@ def main() -> None:
             # combination are written side by side without overwriting.
             label = f"{size}_t{temp}"
             run_dir = _run_one(
-                size, args.rounds, temp, args.seed, args.model,
+                size, args.rounds, temp, args.seed, model_keys,
                 args.system_prompt,
             )
             if run_dir:
