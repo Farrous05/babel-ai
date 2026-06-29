@@ -230,15 +230,16 @@ def build_sized_injection(
 ) -> str:
     """Build an off-topic injection of approximately ``target_words`` words.
 
-    The first chunk is chosen far-off-topic (farthest of ``num_candidates``);
-    further sentences are appended until the target length is reached. The
-    result is accumulated **by whole sentences** and always ends on a sentence
-    boundary -- never a mid-sentence fragment, which a self-loop model would
-    otherwise just *complete* instead of responding to (so the injection would
-    read as a continuation, not an off-topic intervention). Length therefore
-    approximates ``target_words`` (it stops at the first sentence that reaches
-    the target) rather than matching it exactly. Used by OUTPUT_SIZED (target =
-    the model's last output length) and SKIM_HALF (target = the dropped half).
+    Prefers a **single coherent corpus item** long enough to reach the target on
+    its own, so the injection is *one topic* rather than a multi-snippet jumble
+    (stitching several unrelated snippets confounds "big dose" with "many
+    topics"). Among the long-enough candidates it picks the farthest-off-topic
+    one and takes its leading **whole sentences** up to the target -- always
+    ending on a sentence boundary, never a mid-sentence fragment (which a
+    self-loop would just *complete* instead of responding to). Only if no single
+    item is long enough does it fall back to stitching. Length therefore
+    approximates ``target_words``. Used by OUTPUT_SIZED (target = the model's
+    last output length) and SKIM_HALF (target = the dropped half).
     """
 
     rng = rng or random.Random()
@@ -255,31 +256,74 @@ def build_sized_injection(
             if s.strip() and s.strip()[-1] in ".!?"
         ]
 
-    # Seed with a far-off-topic paragraph for the distance bias, then keep
-    # adding whole sentences (from fresh paragraphs) until we reach the target.
-    pool = _sentences(
-        build_far_injection(
-            InjectionSize.PARAGRAPH, source, corpus, window_texts,
-            num_candidates, rng=rng,
-        )
-    )
-    out: List[str] = []
-    count = 0
-    guard = 0
-    while count < target_words and guard < 200:
-        if not pool:
-            pool = _sentences(
-                build_injection(InjectionSize.PARAGRAPH, source, corpus, rng=rng)
-            )
-            guard += 1
-            if not pool:  # corpus yielded nothing splittable; bail out
+    def _lead(text: str) -> "tuple[str, int]":
+        """Leading whole sentences of ``text`` up to ~target_words."""
+        out: List[str] = []
+        n = 0
+        for s in _sentences(text):
+            out.append(s)
+            n += len(s.split())
+            if n >= target_words:
                 break
-        s = pool.pop(0)
-        out.append(s)
-        count += len(s.split())
-    return " ".join(out) if out else build_injection(
-        InjectionSize.PARAGRAPH, source, corpus, rng=rng
-    )
+        return " ".join(out), n
+
+    # 1) Prefer ONE coherent item long enough to reach the target alone; among
+    #    such candidates, keep the farthest off-topic. Sample as REAL text;
+    #    NOISE is applied once at the end.
+    long_enough: List[str] = []
+    tries = 0
+    while len(long_enough) < max(num_candidates, 1) and tries < 80:
+        tries += 1
+        lead, n = _lead(rng.choice(corpus))
+        if n >= target_words:
+            long_enough.append(lead)
+
+    if long_enough:
+        text = (
+            long_enough[0]
+            if len(long_enough) == 1
+            else max(
+                long_enough,
+                key=lambda c: measure_injection_distance(c, window_texts)
+                or -1.0,
+            )
+        )
+    else:
+        # 2) Fallback: no single item is long enough -> stitch whole sentences
+        #    from far-off-topic paragraphs until the target is reached.
+        pool = _sentences(
+            build_far_injection(
+                InjectionSize.PARAGRAPH, InjectionSource.REAL, corpus,
+                window_texts, num_candidates, rng=rng,
+            )
+        )
+        out: List[str] = []
+        count = 0
+        guard = 0
+        while count < target_words and guard < 200:
+            if not pool:
+                pool = _sentences(
+                    build_injection(
+                        InjectionSize.PARAGRAPH, InjectionSource.REAL,
+                        corpus, rng=rng,
+                    )
+                )
+                guard += 1
+                if not pool:
+                    break
+            s = pool.pop(0)
+            out.append(s)
+            count += len(s.split())
+        text = " ".join(out) if out else build_injection(
+            InjectionSize.PARAGRAPH, InjectionSource.REAL, corpus, rng=rng
+        )
+
+    # NOISE control: same length / vocabulary, structure destroyed.
+    if source == InjectionSource.NOISE:
+        words = text.split()
+        rng.shuffle(words)
+        text = " ".join(words)
+    return text
 
 
 def measure_injection_distance(

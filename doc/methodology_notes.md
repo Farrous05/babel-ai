@@ -102,6 +102,19 @@ mirrors Maiti, who set their cutoffs *against manually labelled runs*. The spec
 already lists an LLM-judge/NLI as the planned upgrade "if perplexity proves too
 blunt." Tracked in future_work §C.
 
+**Update (2026-06-29) — the LLM-judge is now built, and it was *not* optional.**
+A human read of an instruct-model run under a system prompt found a blatant
+**discourse-level collapse** (same conversational move every turn) that *both*
+metric signals scored as "diverse" — cosine because the topic drifted, Jaccard
+because the wording varied (see [metrics_and_collapse.md](metrics_and_collapse.md)
+§3 and [observations_log.md](observations_log.md)). So the judge is not just a
+validator of the metric thresholds; it is a **separate collapse signal** for a
+class the metrics cannot see. Implemented in
+[`analysis/llm_judge.py`](../analysis/llm_judge.py); it separates collapsed
+(~0.84–0.9) from diverse (~0.5) but **over-flags**, so use the score with a ~0.7
+cutoff and **calibrate that cutoff against a handful of human labels** before
+trusting it at scale.
+
 ---
 
 ## 4. Decision 6 — sampling seed is for reproducibility, not for the science

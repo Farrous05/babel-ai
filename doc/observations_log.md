@@ -8,6 +8,54 @@ explained or acted on, note the resolution inline. Companion to
 
 ---
 
+## 2026-06-29 — Detector blind spot: discourse-level collapse is invisible to cosine & Jaccard (LLM-judge added)
+
+**The finding.** Collapse has a third axis our metrics don't cover. Cosine
+catches *topical* repetition and Jaccard catches *lexical* repetition, but
+neither catches **discourse collapse**: the model repeating the same
+*conversational move* every turn ("enthusiastically affirm + build on your
+idea") while *varying* the topic and the wording. Topic drift keeps cosine
+distance high; synonym/topic variation keeps Jaccard distance high — so both
+read "diverse" while a human instantly sees a loop.
+
+**Evidence.** Llama 3.3 + a "keep the conversation going" system prompt:
+
+| run | metric verdict | LLM-judge |
+|-----|----------------|-----------|
+| system-prompt, 30 rounds (t0.5) | **no collapse** | 0.84 (collapsed) |
+| system-prompt, 60 rounds (t0.2) | collapsed only at **round 32** | 0.88 (collapsed from the start) |
+
+So the metric is a **lagging, partial** indicator of discourse collapse: it
+fires late (round 32) or not at all, while a human/judge sees it immediately.
+Even first-sentence Jaccard missed it (0.83) because the template varies its
+words ("glad/thrilled/fascinated", "guanciale/porcini") — only the *speech act*
+repeats.
+
+**The tool.** Built `analysis/llm_judge.py` — a gpt-4o-mini judge that slides a
+window over a run and scores pattern-repetition *ignoring topic*. Validated:
+0.84–0.9 on collapsed runs, ~0.5 on diverse — real separation, but it
+**over-flags** (called a genuinely-diverse control "repetitive" at 0.5). So use
+the **score with a ~0.7 threshold**, not the model's boolean, and **calibrate
+the threshold against a few human labels** (the detector-validation step flagged
+open in [methodology_notes.md §2](methodology_notes.md)).
+
+**Correction to a prior claim.** "Llama 3.3 resists collapse / sustains
+diversity" (2026-06-29 pilot below) was likely an **artifact**: Llama was
+collapsing at the discourse level the whole time, invisible to the metric. The
+"%>0.40 sustained" measured *topical* drift while it sat in one conversational
+move. Revised view: **both models collapse — gpt-4o-mini topically (visible),
+Llama discourse-ally (invisible to the metric).** Neither is more resilient; the
+instrument saw one and not the other. Relatedly, the system prompt did **not**
+prevent collapse — it *converted* a detectable topical collapse into an
+undetected discourse one.
+
+**Implication.** Don't discard the metrics — *complete* them. Cosine/Jaccard are
+valid for topical/lexical collapse (regime: base / brevity-prompt); add the
+**judge** for discourse collapse (regime: instruct + free-generation + frame);
+report all three and state which each catches.
+
+---
+
 ## 2026-06-29 — Clean injections expose distinct behaviours; recovery is transient + high-variance; Llama pilot
 
 **Injection-fragment bug (fixed).** The new size-matched conditions

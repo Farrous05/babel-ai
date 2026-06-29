@@ -112,6 +112,29 @@ cosine distance** sustained over turns. Perplexity is the guardrail that
 distinguishes "collapsed into a stable repeated phrase" (sane, low perplexity)
 from "collapsed into gibberish" (which we would *not* count as a clean result).
 
+### A third axis: discourse-level collapse (cosine & Jaccard miss it)
+
+Collapse has (at least) **three** dimensions — *meaning*, *words*, and
+*conversational move*. Cosine covers meaning, Jaccard covers words. There is a
+third kind these two **cannot see**: the model repeating the same **discourse
+move** every turn (e.g. "enthusiastically affirm the other + build on their
+idea") while *varying* the topic and the wording. Topic drift keeps cosine
+distance high; synonym/topic variation keeps Jaccard distance high — so both
+read "diverse" while a human instantly reads a loop. (Observed 2026-06-29 with an
+instruct model under a "keep the conversation going" system prompt: the metric
+declared *no collapse* for 30 rounds while every turn was the same affirm-and-
+build move. See [observations_log.md](observations_log.md).)
+
+This blind spot is **regime-dependent**: base models and brevity-prompted models
+collapse *topically/verbatim* (cosine/Jaccard catch it); instruct models in free
+generation collapse *discourse-ally* (they miss it). For the latter regime we add
+an **LLM-as-judge** signal — [`analysis/llm_judge.py`](../analysis/llm_judge.py)
+slides a window over the turns and asks a judge model whether they repeat one
+conversational move, *ignoring topic*. It produces a 0–1 score (use a ~0.7
+threshold; the model's boolean over-flags) and must be **calibrated against human
+labels**. Report all three: cosine (topical), Jaccard (lexical), judge
+(discourse), stating which collapse each catches.
+
 ---
 
 ## 4. How we define collapse

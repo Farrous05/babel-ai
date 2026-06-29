@@ -108,6 +108,7 @@ def _config(
     temp: float,
     seed: int,
     model_key: str = "gpt-4o-mini",
+    system_prompt: Optional[str] = None,
 ) -> ExperimentConfig:
     provider, model = MODELS[model_key]
     return ExperimentConfig(
@@ -124,7 +125,10 @@ def _config(
             AgentConfig(
                 provider=provider,
                 model=model,
-                system_prompt=None,  # free generation (no brevity prompt)
+                # None = free generation (no prompt); a minimal frame can be
+                # passed to stop instruct models breaking character ("this
+                # conversation just started") under last-message feeding.
+                system_prompt=system_prompt,
                 temperature=temp,
                 # Large cap so turns finish on their own (free generation).
                 # 512 was too low -- gpt-4o-mini's natural unprompted reply is
@@ -147,12 +151,15 @@ def _config(
 def _run_one(
     size: str, rounds: int, temp: float, seed: int,
     model_key: str = "gpt-4o-mini",
+    system_prompt: Optional[str] = None,
 ) -> str:
     import random
 
     random.seed(seed)  # fix the fetched seed conversation
     inj = _injection(size, seed=seed)
-    exp = Experiment(_config(inj, rounds, temp, seed, model_key))
+    exp = Experiment(
+        _config(inj, rounds, temp, seed, model_key, system_prompt)
+    )
     exp.run()
     m = exp.metadata
     n_inj = len(m.injections)
@@ -486,6 +493,13 @@ def main() -> None:
         help="loop model (llama-3.3-70b / llama-3-70b use the company "
         "OpenAI-compatible endpoint; creds in .env)",
     )
+    ap.add_argument(
+        "--system-prompt",
+        type=str,
+        default=None,
+        help="optional system prompt to frame the self-loop (default none = "
+        "free generation). Use to stop instruct models breaking character.",
+    )
     args = ap.parse_args()
 
     # Each launch writes into its own timestamped batch folder so a new run's
@@ -516,7 +530,8 @@ def main() -> None:
             # combination are written side by side without overwriting.
             label = f"{size}_t{temp}"
             run_dir = _run_one(
-                size, args.rounds, temp, args.seed, args.model
+                size, args.rounds, temp, args.seed, args.model,
+                args.system_prompt,
             )
             if run_dir:
                 report_latencies(run_dir)
