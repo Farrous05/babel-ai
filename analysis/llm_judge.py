@@ -140,6 +140,97 @@ def judge_run(
     return out
 
 
+def plot_judge_vs_metric(
+    run_dir: str, window: int = 6, step: int = 3
+) -> Optional[str]:
+    """Two stacked panels sharing the x-axis: the **metric** collapse signal
+    (windowed cosine distance, low = collapsed) and the **LLM-judge** collapse
+    score (high = collapsed). Collapse-declared (orange) and injection (purple)
+    markers on both, so you can see directly where the two signals agree and
+    where the judge catches a collapse the metric misses (or vice versa)."""
+    import ast
+    import json
+
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import pandas as pd
+        from matplotlib.lines import Line2D
+    except Exception as e:  # noqa: BLE001
+        print(f"[plot] skipped: {e}")
+        return None
+
+    csv = glob.glob(os.path.join(run_dir, "*.csv"))[0]
+    meta = json.load(open(glob.glob(os.path.join(run_dir, "*_meta.json"))[0]))
+    df = pd.read_csv(csv)
+    agents = df[df["agent_id"].notna()].reset_index(drop=True)
+
+    # metric: windowed cosine distance per round
+    rounds, cosd = [], []
+    for i, row in agents.iterrows():
+        try:
+            a = ast.literal_eval(row["analysis"]) if row.get("analysis") else {}
+        except Exception:  # noqa: BLE001
+            a = {}
+        sw = a.get("semantic_similarity_window")
+        rounds.append(i)
+        cosd.append(None if sw is None else 1.0 - sw)
+
+    # judge: score per sliding window, plotted at the window's centre round
+    jx, jy = [], []
+    for v in judge_run(run_dir, window, step):
+        s = v.get("score")
+        if not isinstance(s, (int, float)):
+            continue
+        lo, hi = (int(x) for x in v["rounds"].split("-"))
+        jx.append((lo + hi) / 2)
+        jy.append(s)
+
+    onsets = meta.get("collapse_onsets") or []
+    inj = [e["round"] for e in (meta.get("injections") or [])]
+
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 7), sharex=True)
+    ax1.plot(rounds, cosd, "-o", ms=3, color="C0")
+    ax1.axhline(0.40, ls="--", lw=1.0, color="grey", label="cutoff 0.40")
+    ax1.set_ylim(0, 1.05)
+    ax1.set_ylabel("metric: windowed\ncosine distance")
+    ax1.set_title(
+        "Collapse — metric vs LLM judge   (metric: BELOW 0.40 = collapsed)"
+    )
+    ax2.plot(jx, jy, "-s", ms=4, color="C2")
+    ax2.axhline(
+        COLLAPSE_THRESHOLD, ls="--", lw=1.0, color="grey",
+        label=f"threshold {COLLAPSE_THRESHOLD}",
+    )
+    ax2.set_ylim(0, 1.05)
+    ax2.set_ylabel("LLM judge\ncollapse score")
+    ax2.set_xlabel("agent round")
+    ax2.set_title("(judge: ABOVE threshold = collapsed)")
+
+    handles = [
+        Line2D([], [], color="orange", lw=1.2, label="collapse declared"),
+        Line2D([], [], color="purple", lw=1.2, ls=":", label="injection"),
+    ]
+    for ax in (ax1, ax2):
+        for r in onsets:
+            ax.axvline(r, ls="-", lw=0.9, color="orange", alpha=0.6)
+        for r in inj:
+            ax.axvline(r, ls=":", lw=1.0, color="purple", alpha=0.7)
+        ax.grid(True, axis="y", ls=":", alpha=0.3)
+        ax.legend(
+            handles=ax.get_legend_handles_labels()[0] + handles,
+            loc="upper right", fontsize=8,
+        )
+
+    fig.tight_layout()
+    out = os.path.join(run_dir, "trajectory_judge_vs_metric.png")
+    fig.savefig(out, dpi=130)
+    plt.close(fig)
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("run_dir", help="a drift_experiment_* run directory")
