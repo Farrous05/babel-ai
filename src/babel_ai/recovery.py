@@ -72,12 +72,12 @@ def _jaccard_distance(a: str, b: str) -> float:
 
 
 def _embed(texts: Sequence[str]):
-    """Embed texts with the analyzer's Sentence-BERT model (lazy import)."""
-    from babel_ai.analyzer import SimilarityAnalyzer
+    """Embed texts for the *reference-based* version-(b) distance. Uses the
+    text-embedding-3-large reference embedder (strong for distance-from-a-
+    reference), not the SBERT turn-to-turn detector model."""
+    from babel_ai.embeddings import reference_embedder
 
-    return SimilarityAnalyzer.semantic_model.encode(
-        list(texts), convert_to_tensor=True
-    )
+    return reference_embedder().encode(list(texts), convert_to_tensor=True)
 
 
 def version_b_distances(

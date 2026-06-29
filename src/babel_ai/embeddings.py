@@ -76,3 +76,19 @@ class OpenAIEmbedder:
             [self._cache[t] for t in norm], dtype=torch.float32
         )
         return out[0] if single else out
+
+
+# Shared reference embedder for *reference-based* distances (version-(b) =
+# distance-from-collapsed-window, and injection distance). text-embedding-3-
+# large is strong here (it separates content that genuinely differs from a far
+# reference). It is NOT used for the turn-to-turn collapse detector, where its
+# same-domain compression hurts separation -- that stays on SBERT (analyzer.py).
+_REFERENCE: "OpenAIEmbedder | None" = None
+
+
+def reference_embedder() -> OpenAIEmbedder:
+    """Lazy singleton OpenAI embedder for reference-based distance metrics."""
+    global _REFERENCE
+    if _REFERENCE is None:
+        _REFERENCE = OpenAIEmbedder("text-embedding-3-large")
+    return _REFERENCE

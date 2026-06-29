@@ -7,10 +7,10 @@ from typing import List, Optional, Tuple
 import numpy as np
 import torch
 import torch.nn.functional as F
+from sentence_transformers import SentenceTransformer
 from sentence_transformers.util import cos_sim
 from transformers import AutoModelForCausalLM, AutoTokenizer, BatchEncoding
 
-from babel_ai.embeddings import OpenAIEmbedder
 from babel_ai.enums import AnalyzerType
 from models import AnalysisResult
 
@@ -40,12 +40,15 @@ class Analyzer(ABC):
 class SimilarityAnalyzer(Analyzer):
     """Analyzes similarity patterns in LLM outputs."""
 
-    # Semantic similarity model. OpenAI text-embedding-3-large (matches the
-    # Multi-LLM paper; 8191-token context so whole turns are embedded, unlike
-    # SBERT all-MiniLM-L6-v2 which truncated at 256 tokens). Drop-in: exposes
-    # the same .encode(...) -> torch.Tensor as SentenceTransformer.
-    semantic_model_name = "text-embedding-3-large"
-    semantic_model = OpenAIEmbedder(semantic_model_name)
+    # Semantic similarity model for the TURN-TO-TURN collapse detector: SBERT
+    # all-MiniLM-L6-v2. Kept on SBERT (not text-embedding-3-large) because for
+    # adjacent same-domain turns SBERT separates collapsed vs diverse cleanly
+    # (the 0.40 cutoff), whereas text-embedding-3-large compresses same-domain
+    # distances into a narrow low band. Reference-based distances (version-(b),
+    # injection distance) use text-embedding-3-large instead -- see
+    # embeddings.reference_embedder().
+    semantic_model_name = "all-MiniLM-L6-v2"
+    semantic_model = SentenceTransformer(semantic_model_name)
 
     # Token model and tokenizer
     token_model_name = "gpt2"

@@ -339,9 +339,11 @@ def measure_injection_distance(
 
     from sentence_transformers.util import cos_sim
 
-    from babel_ai.analyzer import SimilarityAnalyzer
+    from babel_ai.embeddings import reference_embedder
 
-    model = SimilarityAnalyzer.semantic_model
+    # Reference-based distance (injection vs the collapsed window) -> use the
+    # text-embedding-3-large reference embedder, not the SBERT detector model.
+    model = reference_embedder()
     inj = model.encode(injection_text, convert_to_tensor=True)
     win = model.encode(list(window), convert_to_tensor=True)
     win_mean = win.mean(dim=0)
