@@ -8,6 +8,51 @@ explained or acted on, note the resolution inline. Companion to
 
 ---
 
+## 2026-06-30 — Reference embedder tested: large is justified but modest; the 0.30 recovery cutoff is broken
+
+**Why.** We had switched reference-based distances (version-(b)
+distance-from-collapsed-window, injection distance) to
+`text-embedding-3-large` calling it "strong" there — on *reasoning* only (its
+same-domain compression hurts the turn-to-turn detector but shouldn't hurt
+distance-to-a-far-reference). We had never measured it. Did so:
+[analysis/calibrate_reference_embedder.py](../analysis/calibrate_reference_embedder.py).
+
+**Setup.** Labeled set with known ground truth, no human labels needed. Run
+`batch_20260626_173617` stayed in the Italian-cooking attractor for all 297
+turns (the round-11 tech injection was ignored — we read it end-to-end). So:
+NEAR (in-attractor) = 40 post-injection cooking turns; FAR (off-topic) = 39
+passages (Swift/3D-graphics grid run + ShareGPT snippets + the injection text).
+Centroid = collapsed window (rounds 2-11), exactly as recovery.py builds it.
+Distance = `1 - cos(text, centroid)` under each embedder.
+
+**Result.**
+
+| | NEAR mean | FAR mean | gap | AUC | % NEAR above 0.30 cutoff |
+|---|----|----|----|----|----|
+| SBERT all-MiniLM-L6-v2 | 0.486 | 0.935 | +0.450 | **1.000** | **95%** |
+| text-embedding-3-large | 0.308 | 0.839 | +0.532 | **1.000** | **52%** |
+
+**Two findings.**
+1. **"Strong" holds for large — but SBERT is equally strong at ranking** (both
+   AUC 1.000). The earlier implication that we *needed* large for reference
+   distance was overstated. The real, narrower justification: large keeps
+   in-attractor turns *tighter* to the centroid (0.31 vs 0.49) — the same
+   compression that ruined turn-to-turn separation gives cleaner headroom here.
+   So keep large, but the advantage is modest, not categorical.
+2. **The recovery `distance_cutoff=0.30` is miscalibrated (the bigger finding).**
+   On a run that *never recovered*, 52% (large) / 95% (SBERT) of turns clear
+   0.30 and would be flagged "moved away." Clean separation sits at ~0.7 (best
+   threshold 0.715 large / 0.807 SBERT). This quantifies the long-noted
+   "generous recovered flag" — the distance criterion is far too loose and
+   inflated past "recovery" counts. **Action: raise cutoff toward ~0.65-0.70.**
+
+**Caveat.** One attractor, and cooking-vs-tech is a *large* topical gap (so AUC
+1.0 is partly "easy mode"). The hard regime — a turn that genuinely recovered to
+a *related* topic vs. one still circling — is untested, because we have no
+human-labeled genuine recovery to calibrate against (nothing clearly recovered).
+
+---
+
 ## 2026-06-29 — Detector blind spot: discourse-level collapse is invisible to cosine & Jaccard (LLM-judge added)
 
 **The finding.** Collapse has a third axis our metrics don't cover. Cosine
