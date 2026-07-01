@@ -15,6 +15,22 @@ ALL of the spec's criteria hold:
 3. **Perplexity stays sane** — GPT-2 perplexity within a band (not gibberish).
 4. **Not just repeating the injection** — Jaccard distance between the turn and
    the injected text stays well above ~0.
+5. **Did not re-collapse** — the round is not one where the *online* collapse
+   detector declared a new collapse. This distinguishes genuine recovery from
+   merely *hopping into a new attractor* (leaving the old topic only to loop on
+   a new one): the detector is topic-agnostic, so a new loop re-trips it. We
+   reuse its existing onsets rather than re-detecting collapse here.
+6. **Diverse right now** — the round's windowed turn-to-turn cosine distance
+   (signal-(a)) is above the collapse cutoff. Criterion 1 only proves the turn
+   left the *old* attractor (high version-(b) distance); a migration into a new
+   tight loop satisfies it while staying collapsed. This criterion is the robust
+   complement: it requires the model to be genuinely varying turn-to-turn, not
+   parked in *any* loop. (Where criterion 5 depends on the detector having
+   re-fired -- which hysteresis can suppress -- this reads the signal directly.)
+7. **Same language** — the turn did not switch script away from the language
+   the conversation collapsed in (e.g. English -> Chinese). Such drift is not
+   recovery, and it invalidates the perplexity (GPT-2/English) and not-parroting
+   (Jaccard vs the English injection) guards. See ``language.py``.
 
 Thresholds are provisional (like the collapse cutoffs) and meant to be
 calibrated against hand-labeled recoveries.
@@ -27,6 +43,8 @@ import re
 from dataclasses import dataclass, field
 from typing import List, Optional, Sequence
 
+from babel_ai.language import dominant_script, switched_language
+
 logger = logging.getLogger(__name__)
 
 _WORD_RE = re.compile(r"\w+")
@@ -38,11 +56,28 @@ class RecoveryConfig:
 
     hold_k: int = 5  # consecutive qualifying rounds to declare recovery
     distance_cutoff: float = (
-        0.30  # cosine dist from collapsed window to qualify
+        # cosine dist (text-embedding-3-large) from the collapsed window to
+        # qualify as "moved away". Calibrated 2026-06-30
+        # (analysis/calibrate_reference_embedder.py): on a run that never
+        # recovered, in-attractor turns topped out ~0.41 and off-topic passages
+        # started ~0.715, so 0.70 cleanly separates them. The old 0.30 was far
+        # too loose (52-95% of still-collapsed turns falsely cleared it).
+        0.70
     )
     max_perplexity: float = 150.0  # GPT-2 perplexity gibberish guard
     min_jaccard_to_injection: float = (
         0.5  # turn must differ from the injection
+    )
+    min_window_distance: float = (
+        # windowed turn-to-turn cosine distance (signal-(a), 1 - windowed
+        # semantic similarity) the round must clear to count as "diverse right
+        # now" -- the SAME cutoff the collapse detector uses (collapse.py). It
+        # separates genuine recovery from *migration*: leaving the old attractor
+        # only to lock into a new tight loop scores high on version-(b) distance
+        # (far from the old centroid) yet keeps the turn-to-turn distance low,
+        # so this gate rejects it. Catches topically-tight re-collapse; a
+        # drifting discourse loop keeps this high and still needs the judge.
+        0.40
     )
 
 
@@ -113,6 +148,7 @@ def evaluate_recovery(
     injection_round: int,
     injection_text: str,
     window: int,
+    recollapse_rounds: Optional[Sequence[int]] = None,
     config: Optional[RecoveryConfig] = None,
 ) -> RecoveryResult:
     """Evaluate whether the run recovered after the injection.
@@ -125,10 +161,16 @@ def evaluate_recovery(
         injection_round: round at which injection was applied.
         injection_text: the injected text (criterion 4).
         window: collapsed-window size (the turns up to & incl. injection_round).
+        recollapse_rounds: rounds at which the *online* collapse detector
+            declared a NEW collapse after the injection. A round on which the
+            loop re-collapsed cannot count toward recovery, so "moved away from
+            the old attractor" is not mistaken for "hopped into a new loop"
+            (criterion 5). Defaults to none (no re-collapse known).
         config: thresholds; defaults to ``RecoveryConfig()``.
     """
 
     config = config or RecoveryConfig()
+    recollapsed = set(recollapse_rounds or [])
     n = len(agent_contents)
 
     post_start = injection_round + 1
@@ -147,7 +189,14 @@ def evaluate_recovery(
     # Version-(b) distances: each post-injection turn vs collapsed centroid.
     distances = version_b_distances(post_contents, collapsed_window)
 
-    # Per-round qualification against all four criteria.
+    # Baseline language = the script the conversation collapsed in. A
+    # post-injection turn that switches script (e.g. English -> Chinese) is
+    # drift, not recovery, AND it invalidates the perplexity (GPT-2, English)
+    # and not-parroting (Jaccard vs the English injection) guards -- so it
+    # cannot count toward recovery. See language.py.
+    baseline_script = dominant_script(" ".join(collapsed_window))
+
+    # Per-round qualification against all criteria.
     streak = 0
     best_start: Optional[int] = None
     best_len = 0
@@ -165,8 +214,30 @@ def evaluate_recovery(
             _jaccard_distance(content, injection_text)
             >= config.min_jaccard_to_injection
         )
+        not_recollapsed = round_idx not in recollapsed
+        # Criterion 6: diverse *right now*. The windowed turn-to-turn distance
+        # must clear the collapse cutoff, so a turn that left the old attractor
+        # but is looping on a new topic (low turn-to-turn distance) cannot count
+        # as recovery. None (no windowed metric) => treat as not diverse.
+        window_sim = getattr(analysis, "semantic_similarity_window", None)
+        currently_diverse = (
+            window_sim is not None
+            and (1.0 - window_sim) >= config.min_window_distance
+        )
+        # Criterion 7: same language. A turn that switched script away from the
+        # collapsed conversation (e.g. English -> Chinese) is drift, and it
+        # invalidates the perplexity/parroting guards above -- so it cannot
+        # count as recovery.
+        same_language = not switched_language(content, baseline_script)
 
-        if moved_away and perplexity_ok and not_parroting:
+        if (
+            moved_away
+            and perplexity_ok
+            and not_parroting
+            and same_language
+            and not_recollapsed
+            and currently_diverse
+        ):
             if streak == 0:
                 cur_start = round_idx
             streak += 1
