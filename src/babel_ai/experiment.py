@@ -452,6 +452,11 @@ class Experiment:
             injection_round=anchor_round,
             injection_text=injection_text,
             window=self.collapse_detector.config.window,
+            # a round on which the detector re-declared collapse cannot count as
+            # recovery (criterion 5: moved away AND did not re-collapse).
+            recollapse_rounds=[
+                r for r in self._collapse_onsets if r > anchor_round
+            ],
         )
         self.metadata.recovery = asdict(result)
         logger.info(
@@ -591,8 +596,9 @@ class Experiment:
         # Use current working directory if no output directory specified
         output_dir = output_dir or self.output_dir
 
-        # One folder per experiment, with a descriptive run name. Keeps the
-        # "drift_experiment_" prefix so graphical_analysis still finds it.
+        # One folder per experiment, with a human-readable run name. Uses the
+        # "run_" prefix; discovery (graphical_analysis, run_longrun) accepts
+        # both this and the legacy "drift_experiment_" prefix.
         base_filename = self._run_name(metadata)
         run_dir = output_dir / base_filename
         run_dir.mkdir(parents=True, exist_ok=True)
@@ -628,34 +634,36 @@ class Experiment:
         def sanitize(text: str) -> str:
             return re.sub(r"[^0-9A-Za-z.-]+", "-", str(text)).strip("-")
 
+        def short_model(value: str) -> str:
+            # Strip the HF org prefix ("Qwen/Qwen2.5-7B-Instruct" -> the
+            # readable model name) so the folder isn't the name doubled.
+            return sanitize(value.split("/")[-1])
+
         agents = self.config.agent_configs
         if len(agents) == 1:
-            model_part = sanitize(agents[0].model.value)
+            model_part = short_model(agents[0].model.value)
         else:
             model_part = "multiagent-" + "-vs-".join(
-                sanitize(a.model.value) for a in agents
+                short_model(a.model.value) for a in agents
             )
         temp_part = f"t{agents[0].temperature}"
         # Seed in the name for provenance (which run came from which seed);
-        # omitted when no sampling seed is set. Recoverable from meta.json too.
-        seed_part = ""
-        if agents[0].seed is not None:
-            seed_part = f"_s{agents[0].seed}"
+        # "noseed" when sampling is stochastic. Recoverable from meta.json too.
+        seed_part = (
+            f"s{agents[0].seed}" if agents[0].seed is not None else "noseed"
+        )
 
         inj = self.config.injection_config
         if inj is None:
-            cond = "noinj"
+            cond = "no-injection"
         else:
-            cond = (
-                f"inj-{inj.size.value}-{inj.source.value}-"
-                f"{inj.trigger.value}"
-            )
+            # FIXED_ROUND = the fresh-run baseline (inject into an
+            # un-collapsed run); AFTER_COLLAPSE = the real intervention.
+            kind = "fresh" if inj.trigger.name == "FIXED_ROUND" else "inject"
+            cond = f"{kind}-{inj.size.value}-{inj.source.value}"
 
-        ts = metadata.timestamp.strftime("%Y%m%d_%H%M%S")
-        return (
-            f"drift_experiment_{ts}_{model_part}_{temp_part}"
-            f"{seed_part}_{cond}"
-        )
+        ts = metadata.timestamp.strftime("%m%d-%H%M%S")
+        return f"run_{model_part}_{temp_part}_{seed_part}_{cond}_{ts}"
 
     def _generate_pdf(
         self, csv_path: Path, meta_path: Path, pdf_path: Path

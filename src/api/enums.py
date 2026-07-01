@@ -156,6 +156,7 @@ class OllamaCompanyModels(Enum):
     LLAMA_3_70B = "meta-llama/Meta-Llama-3-70B-Instruct"
     LLAMA_3_3_70B = "meta-llama/Llama-3.3-70B-Instruct"
     QWEN_2_5_72B = "Qwen/Qwen2.5-72B-Instruct"
+    QWEN_2_5_7B = "Qwen/Qwen2.5-7B-Instruct"
 
 
 class AzureModels(Enum):

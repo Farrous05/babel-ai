@@ -147,7 +147,8 @@ def main() -> None:
 
     if args.cmd == "build":
         runs = args.runs or sorted(
-            glob.glob("results/longrun/batch_*/drift_experiment_*")
+            glob.glob("results/longrun/runset_*/run_*")
+            + glob.glob("results/longrun/batch_*/drift_experiment_*")
         )[-8:]
         build(runs)
     else:

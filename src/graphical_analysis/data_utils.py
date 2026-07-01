@@ -112,13 +112,15 @@ def _to_optional_float(value: object) -> Optional[float]:
 def list_experiment_csvs(root_dir: str) -> List[str]:
     """Return paths to all CSVs in a structured_analysis-like directory tree.
 
-    The expected shape is `root_dir/**/drift_experiment_*.csv`.
+    The expected shape is `root_dir/**/run_*.csv` (or the legacy
+    `drift_experiment_*.csv`).
     """
 
+    prefixes = ("run_", "drift_experiment_")
     matches: List[str] = []
     for dirpath, _dirnames, filenames in os.walk(root_dir):
         for fn in filenames:
-            if fn.endswith(".csv") and fn.startswith("drift_experiment_"):
+            if fn.endswith(".csv") and fn.startswith(prefixes):
                 matches.append(os.path.join(dirpath, fn))
     matches.sort()
     return matches

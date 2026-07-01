@@ -100,6 +100,7 @@ MODELS = {
     "llama-3.3-70b": (Provider.OLLAMA_COMPANY, OllamaCompanyModels.LLAMA_3_3_70B),
     "llama-3-70b": (Provider.OLLAMA_COMPANY, OllamaCompanyModels.LLAMA_3_70B),
     "qwen-2.5-72b": (Provider.OLLAMA_COMPANY, OllamaCompanyModels.QWEN_2_5_72B),
+    "qwen-2.5-7b": (Provider.OLLAMA_COMPANY, OllamaCompanyModels.QWEN_2_5_7B),
 }
 
 
@@ -126,7 +127,11 @@ def _config(
                 system_prompt=system_prompt,
                 temperature=temp,
                 max_tokens=2048,  # large cap so turns finish on their own
-                seed=seed,
+                # seed < 0 => no sampling seed (stochastic): a served vLLM is
+                # deterministic when seeded, even at temp 1.0, which freezes the
+                # loop into a byte-identical fixed point; pass None to let temp
+                # actually inject stochasticity.
+                seed=(None if seed < 0 else seed),
             )
         )
     return ExperimentConfig(
@@ -156,8 +161,11 @@ def _run_one(
 ) -> str:
     import random
 
-    random.seed(seed)  # fix the fetched seed conversation
-    inj = _injection(size, seed=seed)
+    # Keep the fetched seed conversation + injection snippet reproducible even
+    # when the model sampling is stochastic (seed < 0 => no model seed).
+    fetch_seed = seed if seed >= 0 else 0
+    random.seed(fetch_seed)  # fix the fetched seed conversation
+    inj = _injection(size, seed=fetch_seed)
     exp = Experiment(
         _config(inj, rounds, temp, seed, model_keys, system_prompt)
     )
@@ -170,7 +178,11 @@ def _run_one(
         f"{[e['round'] for e in m.injections]}"
     )
     # find the run dir we just wrote (most recent under OUT_DIR)
-    dirs = sorted(glob.glob(os.path.join(OUT_DIR, "drift_experiment_*")))
+    dirs = sorted(
+        glob.glob(os.path.join(OUT_DIR, "run_*"))
+        + glob.glob(os.path.join(OUT_DIR, "drift_experiment_*")),
+        key=os.path.getmtime,
+    )
     return dirs[-1] if dirs else ""
 
 
@@ -285,10 +297,13 @@ def plot_run(run_dir: str, label: str) -> List[str]:
         resolution (raw Jaccard, i vs i-1). Drops to 0 = verbatim repeat of
         the previous turn; split out so the spiky raw line doesn't clutter the
         smooth windowed curves (no info lost, just separated).
-      * ``..._2_recovery`` — version-(b) distance: how far each turn sits from
-        the collapsed window (a cosine distance vs the pre-injection cluster).
-        Rises and *stays* up = recovered. Drawn only from the first injection
-        on (no attractor exists before that); that span is shaded.
+      * ``..._2_recovery`` — the recovery picture. Two lines: version-(b)
+        distance (how far from the old topic) AND signal-(a) (still varying
+        turn-to-turn). A real recovery needs BOTH above their bars (0.70 and
+        0.40) for >=K rounds, then judge confirmation -- because version-(b)
+        alone also rises for a *migration* (jump to a new topic then re-loop).
+        Green shading marks rounds passing both checks; the title gives the
+        verdict read straight off the two plotted signals.
       * ``..._3_parroting`` — fraction of the injection's *content* (non-
         stopword) words echoed by the turn. Replaces Jaccard-to-injection,
         which saturated near 1 because a short injection is swamped by a long
@@ -424,19 +439,53 @@ def plot_run(run_dir: str, label: str) -> List[str]:
               loc="lower right", fontsize=8)
     written.append(_save(fig, "1b_collapse_raw"))
 
-    # --- 2. recovery signal (version-(b) distance) ---
+    # --- 2. recovery signal: needs BOTH "moved away from the old attractor"
+    # AND "still varying turn-to-turn". version-(b) distance alone ALSO rises
+    # for a *migration* (the model jumps to a new topic then loops on it), so
+    # we overlay signal-(a) (turn-to-turn distance): a genuine recovery keeps
+    # both lines above their bars; a migration shows version-(b) high while
+    # signal-(a) collapses back down. Green shading = both checks pass that
+    # round; a real recovery needs >=K such rounds in a row + judge confirmation.
     fig, ax = plt.subplots(figsize=(12, 4.5))
-    ax.plot(rounds, db, "-o", ms=3, color="C0", label="version-(b) distance")
-    ax.axhline(0.40, ls="--", lw=1.0, color="grey", label="cutoff (0.40)")
+    ax.plot(rounds, db, "-o", ms=3, color="C0",
+            label="distance from old topic (version-b)")
+    ax.plot(rounds, cos_w, "-s", ms=2.5, color="C2", alpha=0.8,
+            label="still varying now (turn-to-turn)")
+    ax.axhline(0.70, ls="--", lw=1.0, color="C0",
+               label="moved-away bar (0.70)")
+    ax.axhline(0.40, ls="--", lw=1.0, color="C2",
+               label="variety bar (0.40)")
+    both = [
+        (db[i] is not None and db[i] >= 0.70)
+        and (cos_w[i] is not None and cos_w[i] >= 0.40)
+        for i in range(len(rounds))
+    ]
+    ax.fill_between(rounds, 0, 1.05, where=both, color="green", alpha=0.13,
+                    label="passes BOTH checks")
     if first_inj is not None:
         ax.axvspan(-0.5, first_inj, color="grey", alpha=0.08,
                    label="pre-injection (no attractor yet)")
+    # Verdict from the two plotted signals (independent of any stored flag):
+    # the longest run where both checks hold.
+    best = cur = 0
+    for ok in both:
+        cur = cur + 1 if ok else 0
+        best = max(best, cur)
+    verdict = (
+        f"CANDIDATE — both checks held {best} rounds (needs judge)"
+        if best >= 5
+        else f"NO recovery — both checks held only {best} rounds (need 5)"
+    )
     ax.set_ylim(0, 1.05)
-    ax.set_ylabel("distance from attractor")
-    ax.set_title(f"Recovery — {head}\n(rises and STAYS up = recovered)")
+    ax.set_ylabel("distance (0 = identical, 1 = unrelated)")
+    ax.set_title(
+        f"Recovery — {head}\n"
+        "real recovery = both lines above bars, >=5 rounds, + judge\n"
+        f"{verdict}"
+    )
     _mark(ax)
     ax.legend(handles=ax.get_legend_handles_labels()[0] + marker_handles,
-              loc="lower right", fontsize=8)
+              loc="center right", fontsize=7, ncol=2)
     written.append(_save(fig, "2_recovery"))
 
     # --- 3. parroting guard (content-word containment of the injection) ---
@@ -458,7 +507,10 @@ def plot_run(run_dir: str, label: str) -> List[str]:
     fig, ax = plt.subplots(figsize=(12, 4.5))
     ax.plot(rounds, ppl, "-^", ms=3, color="C3", label="GPT-2 perplexity")
     ax.set_ylabel("perplexity")
-    ax.set_title(f"Gibberish guard — {head}\n(spikes = nonsense)")
+    ax.set_title(
+        f"Gibberish guard — {head}\n(spikes = nonsense; NOT valid for "
+        "non-English turns -- GPT-2 is English-only)"
+    )
     _mark(ax)
     ax.legend(handles=ax.get_legend_handles_labels()[0] + marker_handles,
               loc="upper right", fontsize=8)
@@ -508,7 +560,7 @@ def main() -> None:
 
     global OUT_DIR
     OUT_DIR = os.path.join(
-        OUT_DIR, f"batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        OUT_DIR, f"runset_{datetime.now().strftime('%m%d-%H%M%S')}"
     )
     os.makedirs(OUT_DIR, exist_ok=True)
 

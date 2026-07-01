@@ -27,7 +27,11 @@ from typing import Dict, List, Optional
 
 sys.path.insert(0, "src")
 
-from api.enums import OpenAIModels, Provider  # noqa: E402
+from api.enums import (  # noqa: E402
+    OllamaCompanyModels,
+    OpenAIModels,
+    Provider,
+)
 from babel_ai.enums import (  # noqa: E402
     AgentSelectionMethod,
     AnalyzerType,
@@ -37,8 +41,10 @@ from babel_ai.enums import (  # noqa: E402
     InjectionTrigger,
 )
 from babel_ai.experiment import Experiment  # noqa: E402
+from llm_judge import judge_recovery  # noqa: E402
 from models import (  # noqa: E402
     AgentConfig,
+    AgentMetric,
     AnalyzerConfig,
     ExperimentConfig,
     FetcherConfig,
@@ -47,6 +53,19 @@ from models import (  # noqa: E402
 
 SIZES = [InjectionSize.WORD, InjectionSize.SENTENCE, InjectionSize.PARAGRAPH]
 SOURCES = [InjectionSource.REAL, InjectionSource.NOISE]
+
+# Selectable loop models (same aliases as run_longrun.py). Default keeps the
+# original gpt-4o-mini behaviour so existing invocations are unchanged; the
+# company-served open models each resolve their own <NAME>_BASE_URL/_API_KEY.
+MODELS = {
+    "gpt-4o-mini": (Provider.OPENAI, OpenAIModels.GPT4O_MINI),
+    "qwen-2.5-72b": (Provider.OLLAMA_COMPANY, OllamaCompanyModels.QWEN_2_5_72B),
+    "qwen-2.5-7b": (Provider.OLLAMA_COMPANY, OllamaCompanyModels.QWEN_2_5_7B),
+    "llama-3.3-70b": (
+        Provider.OLLAMA_COMPANY,
+        OllamaCompanyModels.LLAMA_3_3_70B,
+    ),
+}
 
 FIELDS = [
     "seed",
@@ -58,6 +77,8 @@ FIELDS = [
     "injection_round",
     "injection_distance",
     "recovered",
+    "recovered_confirmed",  # recovered AND the judge agrees it's varied
+    "judge_score",
     "recovery_round",
     "hold_length",
 ]
@@ -68,7 +89,9 @@ def _make_config(
     max_iters: int,
     temp: float = 0.2,
     model_seed: Optional[int] = None,
+    model_key: str = "gpt-4o-mini",
 ) -> ExperimentConfig:
+    provider, model = MODELS[model_key]
     return ExperimentConfig(
         fetcher_config=FetcherConfig(
             fetcher=FetcherType.SHAREGPT,
@@ -81,8 +104,8 @@ def _make_config(
         ),
         agent_configs=[
             AgentConfig(
-                provider=Provider.OPENAI,
-                model=OpenAIModels.GPT4O_MINI,
+                provider=provider,
+                model=model,
                 system_prompt=(
                     "You are a helpful assistant in a conversation. Reply in "
                     "at most 3 sentences, and always finish your final "
@@ -109,14 +132,33 @@ def _run_one(
     injection: Optional[InjectionConfig],
     max_iters: int,
     temp: float,
+    model_key: str = "gpt-4o-mini",
+    stochastic: bool = False,
 ) -> Dict[str, object]:
-    random.seed(seed)  # fix the fetched seed conversation for pairing
-    # also seed model sampling so real vs noise share the same trajectory
-    exp = Experiment(_make_config(injection, max_iters, temp, model_seed=seed))
+    random.seed(seed)  # fix the fetched seed conversation across conditions
+    # model_seed: None => stochastic sampling (required for served vLLM, which
+    # is frozen/deterministic when seeded -- a seed makes it ignore injections
+    # and emit byte-identical turns). Seeded only for exact reproducibility.
+    model_seed = None if stochastic else seed
+    exp = Experiment(
+        _make_config(
+            injection, max_iters, temp, model_seed=model_seed,
+            model_key=model_key,
+        )
+    )
     exp.run()
     m = exp.metadata
     rec = m.recovery or {}
     inj = m.injection or {}
+    # Confirm any flagged recovery with the discourse judge (one call per
+    # candidate recovery; no-op when nothing recovered). This catches the
+    # cheerleader/confused ruts the cheap criteria can't see.
+    agent_contents = [
+        mm.content
+        for mm in exp.result_metrics
+        if isinstance(mm, AgentMetric)
+    ]
+    judged = judge_recovery(agent_contents, rec)
     return {
         "seed": seed,
         "temp": temp,
@@ -127,6 +169,8 @@ def _run_one(
         "injection_round": inj.get("round"),
         "injection_distance": inj.get("distance"),
         "recovered": rec.get("recovered"),
+        "recovered_confirmed": judged["recovered_confirmed"],
+        "judge_score": judged["judge_score"],
         "recovery_round": rec.get("recovery_round"),
         "hold_length": rec.get("hold_length"),
     }
@@ -143,6 +187,13 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--seeds", type=int, default=3)
     ap.add_argument("--max-iters", type=int, default=60)
+    ap.add_argument(
+        "--model",
+        default="gpt-4o-mini",
+        choices=sorted(MODELS),
+        help="loop model alias (company-served models need their "
+        "<NAME>_BASE_URL/_API_KEY in .env)",
+    )
     ap.add_argument(
         "--temp",
         type=float,
@@ -163,6 +214,12 @@ def main() -> None:
         "--fresh",
         action="store_true",
         help="also run the fresh-run injection baseline per condition",
+    )
+    ap.add_argument(
+        "--stochastic",
+        action="store_true",
+        help="no sampling seed (varied output each run). Required for the "
+        "company vLLM, which is frozen/deterministic when seeded.",
     )
     ap.add_argument("--out", default="results/grid/grid_results.csv")
     args = ap.parse_args()
@@ -190,6 +247,8 @@ def main() -> None:
                     None,
                     args.max_iters,
                     temp,
+                    model_key=args.model,
+                    stochastic=args.stochastic,
                 )
             )
             _write(rows, args.out)
@@ -210,6 +269,8 @@ def main() -> None:
                             inj,
                             args.max_iters,
                             temp,
+                            model_key=args.model,
+                            stochastic=args.stochastic,
                         )
                     )
                     _write(rows, args.out)
@@ -230,6 +291,8 @@ def main() -> None:
                                 finj,
                                 args.max_iters,
                                 temp,
+                                model_key=args.model,
+                                stochastic=args.stochastic,
                             )
                         )
                         _write(rows, args.out)
