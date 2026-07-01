@@ -1,28 +1,41 @@
-"""Run the v1 experiment grid (spec step 6).
+"""Run the injection-study grid (free-generation self-loop).
 
-Sweeps the two independent variables -- injection **size** (word/sentence/
-paragraph) x **source** (real/noise) -- across several seeds, plus the
-no-intervention floor (and optionally the fresh-run injection baseline) for
-each seed. Each run's collapse/injection/recovery metadata is collected into
-one tidy CSV (``results/grid/grid_results.csv``) that ``aggregate_grid.py``
-turns into the headline "smallest size that recovers, per source" table.
+Sweeps the axes that matter for "does injection ever help?":
 
-Seed pairing: ``random.seed(s)`` is set before each run so every condition for
-seed ``s`` starts from the *same* fetched conversation; the injection sampler
-uses ``rng_seed=s`` so real vs noise at a given size share the same snippet.
+  * **model**        -- Qwen-7B / Qwen-72B / Llama-3.3-70B / Llama-3.2-3B
+  * **temperature**  -- e.g. 0.7, 1.0
+  * **seed**         -- different starting conversations
+  * **prompt-type**  -- none + 4 system prompts (see PROMPTS)
+  * **injection size** -- paragraph / output-sized / skim-half (real snippets)
+  * **timing**       -- after-collapse (rescue) / early@5 (prevent) /
+                        every-5-rounds (steady dosing)
+  * plus a no-injection **floor** per cell.
+
+Injections are drawn from a deliberately **cross-domain** corpus
+(``data/injection_diverse.json``) and the *farthest-of-N* candidate is chosen,
+so an injection is always a genuinely different topic from the conversation
+(the old grid injected tech-into-tech, which slid straight off).
+
+Each run's collapse/injection/recovery metadata -- including the
+**judge-confirmed** recovery flag -- lands in one CSV, and every run folder gets
+its per-metric PNGs (same as the long-run maker).
 
 Usage::
 
-    poetry run python analysis/run_grid.py --seeds 3
-    poetry run python analysis/run_grid.py --seeds 3 --fresh   # + baseline
+    poetry run python analysis/run_grid.py --models qwen-2.5-7b --stochastic \\
+        --temps 0.7,1.0 --seeds 3 --max-iters 120 --out results/grid/stage1.csv
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
+import glob
+import os
 import random
 import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional
 
 sys.path.insert(0, "src")
@@ -42,6 +55,7 @@ from babel_ai.enums import (  # noqa: E402
 )
 from babel_ai.experiment import Experiment  # noqa: E402
 from llm_judge import judge_recovery  # noqa: E402
+from run_longrun import plot_run  # noqa: E402  (reuse the graph maker)
 from models import (  # noqa: E402
     AgentConfig,
     AgentMetric,
@@ -51,12 +65,59 @@ from models import (  # noqa: E402
     InjectionConfig,
 )
 
-SIZES = [InjectionSize.WORD, InjectionSize.SENTENCE, InjectionSize.PARAGRAPH]
-SOURCES = [InjectionSource.REAL, InjectionSource.NOISE]
+# Injection *sizes* -- the same three "clean injection" conditions as the
+# long-run study (real off-topic snippets only; no word/sentence, no noise).
+SIZES = [
+    InjectionSize.PARAGRAPH,
+    InjectionSize.OUTPUT_SIZED,
+    InjectionSize.SKIM_HALF,
+]
 
-# Selectable loop models (same aliases as run_longrun.py). Default keeps the
-# original gpt-4o-mini behaviour so existing invocations are unchanged; the
-# company-served open models each resolve their own <NAME>_BASE_URL/_API_KEY.
+# Cross-domain injection corpus so every injection is a genuinely new topic.
+DIVERSE_CORPUS = "data/injection_diverse.json"
+NUM_CANDIDATES = 8  # pick the farthest-off-topic of N sampled snippets
+
+# Serializes the (fast) seed-conversation fetch so concurrent worker threads
+# don't clobber each other's global random state during Experiment construction.
+_FETCH_LOCK = threading.Lock()
+
+# Injection *timings* -> (trigger, extra InjectionConfig kwargs).
+#   after_collapse = inject once when it gets stuck   -> "can we rescue it?"
+#   early_5        = inject once at round 5 (pre-collapse) -> "can we prevent it?"
+#   every_5        = inject every 5 rounds (steady dosing) -> "does a drip keep
+#                    it diverse, or just walk it between stuck-topics?"
+TIMINGS: Dict[str, tuple] = {
+    "after_collapse": (InjectionTrigger.AFTER_COLLAPSE, {}),
+    "early_5": (InjectionTrigger.FIXED_ROUND, {"fixed_round": 5}),
+    "every_5": (InjectionTrigger.FIXED_INTERVAL, {"interval": 5}),
+}
+
+# 5 prompt-types: "none" (pure free generation) + 4 system-prompt strategies.
+PROMPTS: Dict[str, Optional[str]] = {
+    "none": None,
+    "no_repeat": (
+        "You are in an open-ended conversation. Each reply must introduce a "
+        "genuinely new idea, fact, or question -- never repeat points already "
+        "made or keep circling the same topic."
+    ),
+    "follow_new": (
+        "Pay close attention to any new or surprising information in the "
+        "latest message and follow where it leads, instead of continuing your "
+        "previous train of thought."
+    ),
+    "curious": (
+        "You are an intensely curious conversationalist who loves tangents. "
+        "Chase whatever is most interesting or unexpected in the last message, "
+        "even if it means changing the subject."
+    ),
+    "disagree": (
+        "Be critical. Each reply should question, challenge, or disagree with "
+        "something in the previous message -- never just agree and elaborate."
+    ),
+}
+
+# Selectable loop models (same aliases as run_longrun.py). Company-served open
+# models each resolve their own <NAME>_BASE_URL/_API_KEY.
 MODELS = {
     "gpt-4o-mini": (Provider.OPENAI, OpenAIModels.GPT4O_MINI),
     "qwen-2.5-72b": (Provider.OLLAMA_COMPANY, OllamaCompanyModels.QWEN_2_5_72B),
@@ -65,15 +126,22 @@ MODELS = {
         Provider.OLLAMA_COMPANY,
         OllamaCompanyModels.LLAMA_3_3_70B,
     ),
+    "llama-3.2-3b": (
+        Provider.OLLAMA_COMPANY,
+        OllamaCompanyModels.LLAMA_3_2_3B,
+    ),
 }
 
 FIELDS = [
-    "seed",
+    "model",
     "temp",
-    "condition",
+    "seed",
+    "prompt",
+    "condition",  # floor | inject
     "size",
-    "source",
+    "timing",
     "collapse_onset",
+    "n_injections",
     "injection_round",
     "injection_distance",
     "recovered",
@@ -87,10 +155,14 @@ FIELDS = [
 def _make_config(
     injection: Optional[InjectionConfig],
     max_iters: int,
-    temp: float = 0.2,
-    model_seed: Optional[int] = None,
-    model_key: str = "gpt-4o-mini",
+    temp: float,
+    model_key: str,
+    system_prompt: Optional[str],
+    model_seed: Optional[int],
+    output_dir: str,
 ) -> ExperimentConfig:
+    """Free-generation self-loop config: last-message feeding, large token cap,
+    the given system prompt (or none)."""
     provider, model = MODELS[model_key]
     return ExperimentConfig(
         fetcher_config=FetcherConfig(
@@ -106,66 +178,111 @@ def _make_config(
             AgentConfig(
                 provider=provider,
                 model=model,
-                system_prompt=(
-                    "You are a helpful assistant in a conversation. Reply in "
-                    "at most 3 sentences, and always finish your final "
-                    "sentence."
-                ),
+                system_prompt=system_prompt,  # None = pure free generation
                 temperature=temp,
-                max_tokens=150,
+                max_tokens=2048,  # large cap so turns finish on their own
                 seed=model_seed,
             )
         ],
         agent_selection_method=AgentSelectionMethod.ROUND_ROBIN,
         max_iterations=max_iters,
-        max_total_characters=10**6,
-        output_dir="results/grid",
+        max_total_characters=10**7,
+        history_window=1,  # feed only the last message (Maiti-style self-loop)
+        output_dir=output_dir,
         injection_config=injection,
     )
 
 
+def _make_injection(
+    size: InjectionSize, timing: str, seed: int
+) -> InjectionConfig:
+    trigger, extra = TIMINGS[timing]
+    return InjectionConfig(
+        size=size,
+        source=InjectionSource.REAL,
+        trigger=trigger,
+        corpus_path=DIVERSE_CORPUS,
+        num_candidates=NUM_CANDIDATES,
+        rng_seed=seed,
+        **extra,
+    )
+
+
 def _run_one(
+    model_key: str,
+    temp: float,
     seed: int,
+    prompt_name: str,
     condition: str,
     size: Optional[InjectionSize],
-    source: Optional[InjectionSource],
+    timing: Optional[str],
     injection: Optional[InjectionConfig],
     max_iters: int,
-    temp: float,
-    model_key: str = "gpt-4o-mini",
-    stochastic: bool = False,
+    stochastic: bool,
+    make_plots: bool,
+    study_root: str,
 ) -> Dict[str, object]:
-    random.seed(seed)  # fix the fetched seed conversation across conditions
-    # model_seed: None => stochastic sampling (required for served vLLM, which
-    # is frozen/deterministic when seeded -- a seed makes it ignore injections
-    # and emit byte-identical turns). Seeded only for exact reproducibility.
+    # model_seed None => stochastic sampling. A served vLLM is deterministic
+    # when seeded, which freezes it into ignoring injections; seed only for
+    # exact reproduction.
     model_seed = None if stochastic else seed
-    exp = Experiment(
-        _make_config(
-            injection, max_iters, temp, model_seed=model_seed,
-            model_key=model_key,
+    # Each run lands under study/<model>/<prompt>/ so 900 runs stay browsable.
+    output_dir = os.path.join(study_root, model_key, prompt_name)
+    os.makedirs(output_dir, exist_ok=True)
+    # The seed conversation is fetched in Experiment.__init__ using the global
+    # random state, so serialize construction: with threads that keeps each
+    # seed's starting conversation deterministic. The slow part (run) is
+    # outside the lock and runs concurrently.
+    with _FETCH_LOCK:
+        random.seed(seed)
+        exp = Experiment(
+            _make_config(
+                injection,
+                max_iters,
+                temp,
+                model_key,
+                PROMPTS[prompt_name],
+                model_seed,
+                output_dir,
+            )
         )
-    )
     exp.run()
     m = exp.metadata
     rec = m.recovery or {}
     inj = m.injection or {}
-    # Confirm any flagged recovery with the discourse judge (one call per
-    # candidate recovery; no-op when nothing recovered). This catches the
-    # cheerleader/confused ruts the cheap criteria can't see.
     agent_contents = [
-        mm.content
-        for mm in exp.result_metrics
-        if isinstance(mm, AgentMetric)
+        mm.content for mm in exp.result_metrics if isinstance(mm, AgentMetric)
     ]
+    # Confirm any flagged recovery with the discourse judge (one call per
+    # candidate recovery; no-op when nothing recovered).
     judged = judge_recovery(agent_contents, rec)
+
+    # Per-run PNGs into the run's own folder (newest run_* under output_dir).
+    if make_plots:
+        try:
+            dirs = sorted(
+                glob.glob(os.path.join(output_dir, "run_*")),
+                key=os.path.getmtime,
+            )
+            if dirs:
+                label = (
+                    f"{model_key}_{prompt_name}_"
+                    f"{(size.value if size else 'floor')}_{timing or ''}"
+                )
+                plot_run(dirs[-1], label)
+        except Exception as e:  # noqa: BLE001
+            print(f"[grid] plot skipped: {e}")
+
     return {
-        "seed": seed,
+        "model": model_key,
         "temp": temp,
+        "seed": seed,
+        "prompt": prompt_name,
         "condition": condition,
         "size": size.value if size else "",
-        "source": source.value if source else "",
+        "timing": timing or "",
         "collapse_onset": m.collapse_onset_round,
+        "n_injections": len(m.injections or []),
         "injection_round": inj.get("round"),
         "injection_distance": inj.get("distance"),
         "recovered": rec.get("recovered"),
@@ -174,6 +291,30 @@ def _run_one(
         "recovery_round": rec.get("recovery_round"),
         "hold_length": rec.get("hold_length"),
     }
+
+
+def _worker(spec: Dict[str, object]) -> Dict[str, object]:
+    """Run one cell (own process, so per-run random seeding never clashes)."""
+    size = InjectionSize(spec["size"]) if spec["size"] else None
+    injection = (
+        _make_injection(size, str(spec["timing"]), int(spec["seed"]))
+        if spec["condition"] == "inject"
+        else None
+    )
+    return _run_one(
+        str(spec["model"]),
+        float(spec["temp"]),
+        int(spec["seed"]),
+        str(spec["prompt"]),
+        str(spec["condition"]),
+        size,
+        (str(spec["timing"]) if spec["timing"] else None),
+        injection,
+        int(spec["max_iters"]),
+        bool(spec["stochastic"]),
+        bool(spec["make_plots"]),
+        str(spec["study_root"]),
+    )
 
 
 def _write(rows: List[Dict[str, object]], path: str) -> None:
@@ -186,120 +327,163 @@ def _write(rows: List[Dict[str, object]], path: str) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--seeds", type=int, default=3)
-    ap.add_argument("--max-iters", type=int, default=60)
+    ap.add_argument("--max-iters", type=int, default=120)
     ap.add_argument(
-        "--model",
-        default="gpt-4o-mini",
-        choices=sorted(MODELS),
-        help="loop model alias (company-served models need their "
-        "<NAME>_BASE_URL/_API_KEY in .env)",
+        "--models",
+        default="qwen-2.5-7b,qwen-2.5-72b,llama-3.3-70b",
+        help="comma-separated model aliases; choices: " + ",".join(MODELS),
     )
-    ap.add_argument(
-        "--temp",
-        type=float,
-        default=0.2,
-        help="single sampling temperature (ignored if --temps is given)",
-    )
+    ap.add_argument("--temp", type=float, default=0.7)
     ap.add_argument(
         "--temps",
         type=str,
         default=None,
-        help=(
-            "comma-separated temperatures to sweep, e.g. 0.0,0.5,1.0. "
-            "temp 0 (greedy) is the cleanest collapse; higher temps test "
-            "whether stochasticity prevents it."
+        help="comma-separated temperatures to sweep (overrides --temp)",
+    )
+    ap.add_argument(
+        "--sizes",
+        type=str,
+        default=",".join(s.value for s in SIZES),
+        help="comma-separated injection sizes; default: " + ",".join(
+            s.value for s in SIZES
         ),
     )
     ap.add_argument(
-        "--fresh",
-        action="store_true",
-        help="also run the fresh-run injection baseline per condition",
+        "--timings",
+        type=str,
+        default=",".join(TIMINGS),
+        help="comma-separated timings; default: " + ",".join(TIMINGS),
+    )
+    ap.add_argument(
+        "--prompts",
+        type=str,
+        default=",".join(PROMPTS),
+        help="comma-separated prompt-types; default: " + ",".join(PROMPTS),
     )
     ap.add_argument(
         "--stochastic",
         action="store_true",
-        help="no sampling seed (varied output each run). Required for the "
-        "company vLLM, which is frozen/deterministic when seeded.",
+        help="no sampling seed (required for the company vLLM, which is "
+        "frozen/deterministic when seeded)",
     )
-    ap.add_argument("--out", default="results/grid/grid_results.csv")
+    ap.add_argument(
+        "--no-plots",
+        action="store_true",
+        help="skip per-run PNG generation (faster)",
+    )
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="concurrent conversations (own process each). vLLM handles "
+        "concurrency well; raise if the endpoints + machine can take it.",
+    )
+    ap.add_argument("--out", default="results/study/summary.csv")
     args = ap.parse_args()
 
-    import os
-
-    os.makedirs(os.path.dirname(args.out), exist_ok=True)
+    # The study lives in one folder; each run goes to study/<model>/<prompt>/.
+    study_root = os.path.dirname(args.out)
+    os.makedirs(study_root, exist_ok=True)
 
     temps = (
         [float(t) for t in args.temps.split(",")]
         if args.temps
         else [args.temp]
     )
+    models = [m.strip() for m in args.models.split(",") if m.strip()]
+    sizes = [InjectionSize(s.strip()) for s in args.sizes.split(",")]
+    timings = [t.strip() for t in args.timings.split(",")]
+    prompts = [p.strip() for p in args.prompts.split(",")]
 
-    rows: List[Dict[str, object]] = []
+    per_cell = 1 + len(sizes) * len(timings)  # floor + injections
+    total = len(temps) * args.seeds * len(models) * len(prompts) * per_cell
+    print(
+        f"[grid] plan: {len(models)} models x {len(temps)} temps x "
+        f"{args.seeds} seeds x {len(prompts)} prompts x "
+        f"(1 floor + {len(sizes)}x{len(timings)} inj) = {total} runs"
+    )
+
+    make_plots = not args.no_plots
+    common = dict(
+        max_iters=args.max_iters,
+        stochastic=args.stochastic,
+        make_plots=make_plots,
+        study_root=study_root,
+    )
+    # Build every cell as a picklable spec, then run them concurrently.
+    specs: List[Dict[str, object]] = []
     for temp in temps:
         for seed in range(args.seeds):
-            # no-intervention floor
-            rows.append(
-                _run_one(
-                    seed,
-                    "no_intervention",
-                    None,
-                    None,
-                    None,
-                    args.max_iters,
-                    temp,
-                    model_key=args.model,
-                    stochastic=args.stochastic,
-                )
-            )
+            for model_key in models:
+                for prompt_name in prompts:
+                    specs.append(dict(
+                        model=model_key, temp=temp, seed=seed,
+                        prompt=prompt_name, condition="floor",
+                        size=None, timing=None, **common,
+                    ))
+                    for size in sizes:
+                        for timing in timings:
+                            specs.append(dict(
+                                model=model_key, temp=temp, seed=seed,
+                                prompt=prompt_name, condition="inject",
+                                size=size.value, timing=timing, **common,
+                            ))
+
+    def _key(model, temp, seed, prompt, condition, size, timing) -> tuple:
+        return (
+            str(model), str(float(temp)), str(int(seed)), str(prompt),
+            str(condition), str(size or ""), str(timing or ""),
+        )
+
+    # Resume: if the summary already exists, keep its rows and skip cells that
+    # are already done -- so re-running after the endpoints refresh continues
+    # where it left off, redoing nothing that finished.
+    rows: List[Dict[str, object]] = []
+    if os.path.exists(args.out):
+        with open(args.out) as f:
+            rows = list(csv.DictReader(f))
+        done = {
+            _key(r["model"], r["temp"], r["seed"], r["prompt"],
+                 r["condition"], r["size"], r["timing"])
+            for r in rows
+        }
+        kept = [
+            s for s in specs
+            if _key(s["model"], s["temp"], s["seed"], s["prompt"],
+                    s["condition"], s["size"], s["timing"]) not in done
+        ]
+        print(
+            f"[grid] resume: {len(specs) - len(kept)} cells already done, "
+            f"{len(kept)} left to run"
+        )
+        specs = kept
+
+    # Interleave by model so concurrent workers hit all endpoints at once
+    # (otherwise one model's block finishes before the next even starts).
+    by_model: Dict[str, List[Dict[str, object]]] = {}
+    for s in specs:
+        by_model.setdefault(str(s["model"]), []).append(s)
+    lists = list(by_model.values())
+    specs = [
+        lst[i] for i in range(max((len(x) for x in lists), default=0))
+        for lst in lists if i < len(lst)
+    ]
+
+    if not specs:
+        print("[grid] nothing left to run (all cells done)")
+        return
+
+    with ThreadPoolExecutor(max_workers=args.workers) as ex:
+        futs = [ex.submit(_worker, s) for s in specs]
+        for i, fut in enumerate(as_completed(futs), 1):
+            try:
+                rows.append(fut.result())
+            except Exception as e:  # noqa: BLE001
+                print(f"[grid] a run failed: {type(e).__name__}: {e}")
+            # Write the summary after EVERY run so nothing is lost if the
+            # endpoints expire / the laptop closes mid-study.
             _write(rows, args.out)
-            for size in SIZES:
-                for source in SOURCES:
-                    inj = InjectionConfig(
-                        size=size,
-                        source=source,
-                        trigger=InjectionTrigger.AFTER_COLLAPSE,
-                        rng_seed=seed,
-                    )
-                    rows.append(
-                        _run_one(
-                            seed,
-                            "intervention",
-                            size,
-                            source,
-                            inj,
-                            args.max_iters,
-                            temp,
-                            model_key=args.model,
-                            stochastic=args.stochastic,
-                        )
-                    )
-                    _write(rows, args.out)
-                    if args.fresh:
-                        finj = InjectionConfig(
-                            size=size,
-                            source=source,
-                            trigger=InjectionTrigger.FIXED_ROUND,
-                            fixed_round=5,
-                            rng_seed=seed,
-                        )
-                        rows.append(
-                            _run_one(
-                                seed,
-                                "fresh",
-                                size,
-                                source,
-                                finj,
-                                args.max_iters,
-                                temp,
-                                model_key=args.model,
-                                stochastic=args.stochastic,
-                            )
-                        )
-                        _write(rows, args.out)
-            print(
-                f"[grid] temp {temp} seed {seed} done "
-                f"({len(rows)} runs so far)"
-            )
+            print(f"[grid] {i}/{len(specs)} runs done", flush=True)
 
     print(f"[grid] wrote {len(rows)} runs to {args.out}")
 

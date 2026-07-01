@@ -657,10 +657,18 @@ class Experiment:
         if inj is None:
             cond = "no-injection"
         else:
-            # FIXED_ROUND = the fresh-run baseline (inject into an
-            # un-collapsed run); AFTER_COLLAPSE = the real intervention.
-            kind = "fresh" if inj.trigger.name == "FIXED_ROUND" else "inject"
-            cond = f"{kind}-{inj.size.value}-{inj.source.value}"
+            # Distinguish the three injection timings so folder names don't
+            # collide: rescue (after collapse), early5 (once at round 5),
+            # dose5 (repeated every 5 rounds).
+            kind = {
+                "AFTER_COLLAPSE": "rescue",
+                "FIXED_ROUND": "early5",
+                "FIXED_INTERVAL": "dose5",
+            }.get(inj.trigger.name, inj.trigger.name.lower())
+            # source only when it's not the default real snippet (keeps the
+            # common case clean; flags a noise control if ever used)
+            src = "" if inj.source.name == "REAL" else f"-{inj.source.value}"
+            cond = f"{kind}-{inj.size.value}{src}"
 
         ts = metadata.timestamp.strftime("%m%d-%H%M%S")
         return f"run_{model_part}_{temp_part}_{seed_part}_{cond}_{ts}"

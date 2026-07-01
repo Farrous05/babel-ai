@@ -101,6 +101,7 @@ MODELS = {
     "llama-3-70b": (Provider.OLLAMA_COMPANY, OllamaCompanyModels.LLAMA_3_70B),
     "qwen-2.5-72b": (Provider.OLLAMA_COMPANY, OllamaCompanyModels.QWEN_2_5_72B),
     "qwen-2.5-7b": (Provider.OLLAMA_COMPANY, OllamaCompanyModels.QWEN_2_5_7B),
+    "llama-3.2-3b": (Provider.OLLAMA_COMPANY, OllamaCompanyModels.LLAMA_3_2_3B),
 }
 
 
