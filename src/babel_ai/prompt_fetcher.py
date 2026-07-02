@@ -270,6 +270,18 @@ class ShareGPTConversationFetcher(BasePromptFetcher):
             messages.append({"role": msg["from"], "content": msg["value"]})
         logger.debug("Converted conversation to LLMProvider format.")
 
+        # Seed must end on a human turn. ShareGPT threads always end on a
+        # "gpt" (assistant) answer, so a self-loop with history_window=1 would
+        # start by reacting to an answer as if a human had said it. Drop any
+        # trailing assistant turns so the model's first generation is a genuine
+        # reply to a human prompt (this also keeps the positional user/assistant
+        # relabeling in Agent._define_msg_tree aligned with the real turns).
+        while messages and messages[-1]["role"] != "human":
+            messages.pop()
+        logger.debug(
+            f"Trimmed seed to end on human turn: {len(messages)} messages"
+        )
+
         logger.debug(f"Returning conversation with {len(messages)} messages")
         logger.debug(
             "Conversation head:\n"
