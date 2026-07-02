@@ -512,12 +512,16 @@ def main() -> None:
         )
         specs = kept
 
-    # Interleave by model so concurrent workers hit all endpoints at once
-    # (otherwise one model's block finishes before the next even starts).
-    by_model: Dict[str, List[Dict[str, object]]] = {}
+    # Interleave by (model, temp) so concurrent workers hit all endpoints AND
+    # both temperatures at once. Temperature is the outermost build loop, so
+    # without this the whole first temp would finish before the second is ever
+    # touched; round-robining the (model, temp) buckets instead means seed-0
+    # coverage builds across every model and temperature together -- so a window
+    # that stops early still yields balanced coverage, not one temp only.
+    by_cell: Dict[tuple, List[Dict[str, object]]] = {}
     for s in specs:
-        by_model.setdefault(str(s["model"]), []).append(s)
-    lists = list(by_model.values())
+        by_cell.setdefault((str(s["model"]), str(s["temp"])), []).append(s)
+    lists = list(by_cell.values())
     specs = [
         lst[i] for i in range(max((len(x) for x in lists), default=0))
         for lst in lists if i < len(lst)
