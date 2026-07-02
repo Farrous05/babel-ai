@@ -20,12 +20,23 @@ early runs (see §5).
 Each generated turn is scored against the conversation so far. Two fixed
 reference models are used and held constant across every run:
 
-- **Embedding model**: OpenAI **`text-embedding-3-large`** — for semantic
-  similarity. Chosen to match the Multi-LLM paper and because its 8191-token
-  context embeds *whole* turns; the earlier `all-MiniLM-L6-v2` (Sentence-BERT)
-  truncated at 256 tokens, so on our 300–1000-word free-generation turns it
-  only "saw" each turn's opening. Implemented as a drop-in in
-  [`embeddings.py`](../src/babel_ai/embeddings.py) (same `.encode()` interface).
+- **Embedding models** — two, used for two different jobs:
+  - **Turn-to-turn detector signal** (`semantic_similarity`,
+    `semantic_similarity_window`): **Sentence-BERT `all-MiniLM-L6-v2`** in
+    [`analyzer.py`](../src/babel_ai/analyzer.py). Kept on SBERT (not
+    text-embedding-3-large) because for *adjacent same-domain* turns SBERT
+    separates collapsed-vs-diverse cleanly at the 0.40 cutoff, whereas
+    text-embedding-3-large compresses same-domain distances into a narrow low
+    band. SBERT truncates at ~256 tokens, so on 300–1000-word turns we
+    **chunk each turn into token-bounded pieces and mean-pool their
+    embeddings** (`_encode_pooled`) — the whole turn is embedded, not just its
+    opening.
+  - **Reference-based distance** (version-(b): a turn's cosine distance from
+    the *collapsed window's* centroid, and the injection distance): OpenAI
+    **`text-embedding-3-large`** via
+    [`embeddings.py`](../src/babel_ai/embeddings.py) `reference_embedder()`.
+    Its 8191-token context embeds whole turns and it is strong for
+    distance-from-a-reference.
 - **Perplexity reference model**: `gpt2` — a *separate* model from the loop
   model, so perplexity is an independent quality judge.
 

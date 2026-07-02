@@ -33,6 +33,7 @@ import csv
 import glob
 import os
 import random
+import subprocess
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -54,6 +55,7 @@ from babel_ai.enums import (  # noqa: E402
     InjectionTrigger,
 )
 from babel_ai.experiment import Experiment  # noqa: E402
+from babel_ai.recovery import RecoveryConfig  # noqa: E402
 from llm_judge import judge_recovery  # noqa: E402
 from run_longrun import plot_run  # noqa: E402  (reuse the graph maker)
 from models import (  # noqa: E402
@@ -77,6 +79,20 @@ SIZES = [
 DIVERSE_CORPUS = "data/injection_diverse.json"
 NUM_CANDIDATES = 8  # pick the farthest-off-topic of N sampled snippets
 
+
+def _git_hash() -> str:
+    """Short commit the study ran on -- stamped on every row so a resumed
+    summary can never silently mix rows from different code versions."""
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "--short", "HEAD"], text=True
+        ).strip()
+    except Exception:  # noqa: BLE001
+        return "unknown"
+
+
+_GIT_HASH = _git_hash()
+
 # Serializes the (fast) seed-conversation fetch so concurrent worker threads
 # don't clobber each other's global random state during Experiment construction.
 _FETCH_LOCK = threading.Lock()
@@ -86,10 +102,22 @@ _FETCH_LOCK = threading.Lock()
 #   early_5        = inject once at round 5 (pre-collapse) -> "can we prevent it?"
 #   every_5        = inject every 5 rounds (steady dosing) -> "does a drip keep
 #                    it diverse, or just walk it between stuck-topics?"
+# Treatment timings -- injected into the (collapsing) self-loop.
 TIMINGS: Dict[str, tuple] = {
     "after_collapse": (InjectionTrigger.AFTER_COLLAPSE, {}),
     "early_5": (InjectionTrigger.FIXED_ROUND, {"fixed_round": 5}),
     "every_5": (InjectionTrigger.FIXED_INTERVAL, {"interval": 5}),
+}
+
+# Fresh-run baseline (control): inject the same snippet at round 2, into a loop
+# that has NOT collapsed yet, so we can compare "how far a big real injection
+# moves a fresh loop" against "how far it moves a collapsed one" -- i.e. measure
+# the pull (basin) of the attractor, not just the raw displacement. Its own
+# condition ("fresh"), not a treatment timing.
+FRESH_TIMING = "fresh"
+_ALL_TIMINGS: Dict[str, tuple] = {
+    **TIMINGS,
+    FRESH_TIMING: (InjectionTrigger.FIXED_ROUND, {"fixed_round": 2}),
 }
 
 # 5 prompt-types: "none" (pure free generation) + 4 system-prompt strategies.
@@ -137,7 +165,7 @@ FIELDS = [
     "temp",
     "seed",
     "prompt",
-    "condition",  # floor | inject
+    "condition",  # floor | inject | fresh
     "size",
     "timing",
     "collapse_onset",
@@ -149,6 +177,11 @@ FIELDS = [
     "judge_score",
     "recovery_round",
     "hold_length",
+    # dose-response of the transient (the reframed primary endpoint): how far
+    # the injection knocked the loop off the attractor, and for how long.
+    "peak_displacement",  # max version-(b) distance from the collapsed window
+    "displaced_rounds",   # # post-anchor rounds held above the distance cutoff
+    "git_hash",           # code version this row was produced on (#9)
 ]
 
 
@@ -196,7 +229,7 @@ def _make_config(
 def _make_injection(
     size: InjectionSize, timing: str, seed: int
 ) -> InjectionConfig:
-    trigger, extra = TIMINGS[timing]
+    trigger, extra = _ALL_TIMINGS[timing]
     return InjectionConfig(
         size=size,
         source=InjectionSource.REAL,
@@ -257,6 +290,15 @@ def _run_one(
     # candidate recovery; no-op when nothing recovered).
     judged = judge_recovery(agent_contents, rec)
 
+    # Dose-response endpoints (#6): magnitude + duration of the transient,
+    # derived from the per-round version-(b) distances the recovery evaluator
+    # already logged. peak = how far off the attractor it got; displaced_rounds
+    # = how many post-anchor rounds stayed above the "moved away" cutoff.
+    dists = rec.get("post_injection_distances") or []
+    cutoff = RecoveryConfig().distance_cutoff
+    peak_displacement = max(dists) if dists else None
+    displaced_rounds = sum(1 for d in dists if d >= cutoff)
+
     # Per-run PNGs into the run's own folder (newest run_* under output_dir).
     if make_plots:
         try:
@@ -290,6 +332,9 @@ def _run_one(
         "judge_score": judged["judge_score"],
         "recovery_round": rec.get("recovery_round"),
         "hold_length": rec.get("hold_length"),
+        "peak_displacement": peak_displacement,
+        "displaced_rounds": displaced_rounds,
+        "git_hash": _GIT_HASH,
     }
 
 
@@ -298,7 +343,7 @@ def _worker(spec: Dict[str, object]) -> Dict[str, object]:
     size = InjectionSize(spec["size"]) if spec["size"] else None
     injection = (
         _make_injection(size, str(spec["timing"]), int(spec["seed"]))
-        if spec["condition"] == "inject"
+        if spec["condition"] in ("inject", "fresh")
         else None
     )
     return _run_one(
@@ -395,12 +440,14 @@ def main() -> None:
     timings = [t.strip() for t in args.timings.split(",")]
     prompts = [p.strip() for p in args.prompts.split(",")]
 
-    per_cell = 1 + len(sizes) * len(timings)  # floor + injections
+    # floor + (sizes x timings) treatments + (sizes) fresh-run baselines
+    per_cell = 1 + len(sizes) * len(timings) + len(sizes)
     total = len(temps) * args.seeds * len(models) * len(prompts) * per_cell
     print(
         f"[grid] plan: {len(models)} models x {len(temps)} temps x "
         f"{args.seeds} seeds x {len(prompts)} prompts x "
-        f"(1 floor + {len(sizes)}x{len(timings)} inj) = {total} runs"
+        f"(1 floor + {len(sizes)}x{len(timings)} inj + {len(sizes)} fresh) "
+        f"= {total} runs"
     )
 
     make_plots = not args.no_plots
@@ -428,6 +475,13 @@ def main() -> None:
                                 prompt=prompt_name, condition="inject",
                                 size=size.value, timing=timing, **common,
                             ))
+                        # fresh-run baseline: same size, injected early into a
+                        # not-yet-collapsed loop (the control for displacement).
+                        specs.append(dict(
+                            model=model_key, temp=temp, seed=seed,
+                            prompt=prompt_name, condition="fresh",
+                            size=size.value, timing=FRESH_TIMING, **common,
+                        ))
 
     def _key(model, temp, seed, prompt, condition, size, timing) -> tuple:
         return (

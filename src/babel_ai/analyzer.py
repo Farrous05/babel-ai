@@ -1,6 +1,7 @@
 """Analyzer classes for LLM drift experiments."""
 
 import logging
+import threading
 from abc import ABC, abstractmethod
 from typing import List, Optional, Tuple
 
@@ -49,6 +50,11 @@ class SimilarityAnalyzer(Analyzer):
     # embeddings.reference_embedder().
     semantic_model_name = "all-MiniLM-L6-v2"
     semantic_model = SentenceTransformer(semantic_model_name)
+
+    # The SBERT model + fast tokenizer are shared across all analyzer instances
+    # and threads; HF fast tokenizers are not thread-safe, so serialize semantic
+    # embedding across the grid's worker threads (see _encode_pooled).
+    _embed_lock = threading.Lock()
 
     # Token model and tokenizer
     token_model_name = "gpt2"
@@ -178,6 +184,39 @@ class SimilarityAnalyzer(Analyzer):
         logger.warning("No similarities found. Returning None.")
         return None
 
+    def _encode_pooled(self, text: str):
+        """Embed ``text`` with SBERT, chunking + mean-pooling long turns.
+
+        all-MiniLM-L6-v2 truncates at ~256 tokens; free-generation turns run
+        300-1000 words, so a plain ``encode`` would embed only each turn's
+        opening and the collapse detector would score on turn *heads* alone.
+        We split anything longer than the model's max sequence length into
+        token-bounded chunks, embed each, and mean-pool them so the whole turn
+        is represented. Short turns take the fast path (single encode).
+
+        The SBERT model and its fast tokenizer are shared class attributes, and
+        HuggingFace fast tokenizers are NOT thread-safe (concurrent use raises
+        ``RuntimeError: Already borrowed``). Grid runs score turns from several
+        worker threads at once, so all tokenizer/encode access is serialized
+        under ``_embed_lock``. Embedding is cheap next to generation (the slow,
+        network-bound, still-parallel step), so this is not a bottleneck.
+        """
+        with self._embed_lock:
+            tokenizer = self.semantic_model.tokenizer
+            max_len = int(self.semantic_model.max_seq_length or 256)
+            budget = max(1, max_len - 2)  # leave room for special tokens
+            ids = tokenizer.encode(text, add_special_tokens=False)
+            if len(ids) <= budget:
+                return self.semantic_model.encode(text, convert_to_tensor=True)
+            chunks = [
+                tokenizer.decode(ids[i : i + budget])
+                for i in range(0, len(ids), budget)
+            ]
+            chunk_embeddings = self.semantic_model.encode(
+                chunks, convert_to_tensor=True
+            )
+            return chunk_embeddings.mean(dim=0)
+
     def _analyze_semantic_similarity(
         self, outputs: List[str], window_size: int = 1
     ) -> Optional[float]:
@@ -211,9 +250,7 @@ class SimilarityAnalyzer(Analyzer):
 
         current_text = outputs[-1]
         logger.debug(f"Current text: {current_text[:50]}")
-        current_embedding = self.semantic_model.encode(
-            current_text, convert_to_tensor=True
-        )
+        current_embedding = self._encode_pooled(current_text)
 
         # Calculate similarities within the specified window
         similarities = []
@@ -224,9 +261,7 @@ class SimilarityAnalyzer(Analyzer):
             compare_text = outputs[i]
             logger.debug(f"Comparing with {compare_text[:50]}")
 
-            compare_embedding = self.semantic_model.encode(
-                compare_text, convert_to_tensor=True
-            )
+            compare_embedding = self._encode_pooled(compare_text)
 
             logger.debug("Calculating cosine similarity")
             similarity = cos_sim(current_embedding, compare_embedding).item()

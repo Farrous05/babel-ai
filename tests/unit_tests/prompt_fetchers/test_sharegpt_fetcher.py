@@ -112,9 +112,13 @@ class TestShareGPTConversationFetcher(TestCase):
         )
         conversation = fetcher.get_conversation()
 
-        # Verify conversation structure
+        # Verify conversation structure. get_conversation() trims trailing
+        # assistant ("gpt") turns so the seed ends on a human turn, so a
+        # 2-message [human, gpt] thread becomes [human] (length 1). The seed is
+        # therefore 1..max_messages long and must end on a human turn.
         self.assertIsInstance(conversation, list)
-        self.assertTrue(2 <= len(conversation) <= 4)
+        self.assertTrue(1 <= len(conversation) <= 4)
+        self.assertEqual(conversation[-1]["role"], "human")
 
         # Verify message format
         first_message = conversation[0]

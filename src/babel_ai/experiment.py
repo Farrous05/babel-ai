@@ -151,6 +151,16 @@ class Experiment:
             self.prompt_fetcher.get_conversation()
         )
 
+        # Clean parallel copy of message *contents*, used only for scoring.
+        # ``self.messages`` is what the model sees and is mutated in place when
+        # we inject (the model must read the injected span on its next turn).
+        # Scoring must NOT see that span, else the injected text sits in the
+        # comparison window and inflates the collapse/recovery metrics for the
+        # whole hold window. So we score over this unmutated list instead.
+        self._scored_contents: List[str] = [
+            m["content"] for m in self.messages
+        ]
+
         # update metadata
         self.metadata.num_fetcher_messages = len(self.messages)
 
@@ -272,6 +282,8 @@ class Experiment:
                     "content": response,
                 }
             )
+            # mirror the clean output into the scoring list (see __init__)
+            self._scored_contents.append(response)
 
             # add response to results, scoring this turn online (so the
             # collapse detector can react while the loop is still running)
@@ -284,7 +296,7 @@ class Experiment:
                 agent_config=agent.config,
             )
             agent_metric.analysis = self.analyzer.analyze(
-                [msg["content"] for msg in self.messages]
+                self._scored_contents
             )
             self.result_metrics.append(agent_metric)
 
@@ -469,9 +481,11 @@ class Experiment:
         """Apply the one-shot post-collapse injection (spec step 3).
 
         Appends marker + injection text to the last output *in the message
-        history the model sees*, but leaves the scored ``AgentMetric.content``
-        as the original output -- so the injected span is excluded from scoring
-        automatically. The tagged ``InjectionEvent`` is logged to metadata.
+        history the model sees* (``self.messages``). Scoring is kept clean two
+        ways: the ``AgentMetric.content`` stays the original output, and the
+        online metric window reads ``self._scored_contents`` (never mutated
+        here) -- so the injected span never enters the collapse/recovery
+        metrics. The tagged ``InjectionEvent`` is logged to metadata.
         """
 
         window = self.collapse_detector.config.window
@@ -496,8 +510,10 @@ class Experiment:
             num_candidates=self.injection_config.num_candidates,
         )
 
-        # The model reads the injection on its next turn; the AgentMetric for
-        # this round keeps the original content, so scoring excludes the span.
+        # The model reads the injection on its next turn. We deliberately do
+        # NOT touch self._scored_contents[-1], so scoring keeps the original,
+        # un-injected output and the injected span never enters the metric
+        # window (the AgentMetric.content is likewise the original output).
         self.messages[-1]["content"] = new_content
         self.total_characters += len(new_content) - len(last_content)
         event_dict = asdict(event)
