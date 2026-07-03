@@ -85,7 +85,7 @@ PERSONA_CYCLE = ["builder", "skeptic", "wanderer"]
 _FETCH_LOCK = threading.Lock()
 
 FIELDS = [
-    "scenario", "agents", "personas", "memory", "inject", "size",
+    "scenario", "seed", "agents", "personas", "memory", "inject", "size",
     "collapse_onset", "n_injections", "recovered", "recovered_confirmed",
     "judge_score", "hold_length", "peak_displacement", "displaced_rounds",
     "git_hash",
@@ -141,44 +141,53 @@ def _make_config(
     )
 
 
-# The pilot: one row per scenario. `agents` are model aliases; `personas` None =
-# homogeneous, or a list assigned round-robin; `memory` = history_window;
-# `inject` = every_5 injection (paragraph) or None.
+# Base multi-agent configs. Each is expanded below into a floor (no injection)
+# plus BOTH injection timings (steady drip AND after-collapse), across seeds.
 BIG_TWO = ["llama-3.3-70b", "qwen-2.5-72b"]
 THREE = ["llama-3.3-70b", "qwen-2.5-72b", "qwen-2.5-7b"]
 
+# name -> (agents, personas, memory). personas None = homogeneous.
+BASE_CONFIGS: Dict[str, tuple] = {
+    # two big models talking (self-loop-style memory)
+    "two": (BIG_TWO, None, 1),
+    # same two, but full memory (agents remember the whole conversation)
+    "two_memory": (BIG_TWO, None, None),
+    # three agents together
+    "three": (THREE, None, 1),
+    # persona diversity (Diversity paper's MAP): clashing personas
+    "diverse_two": (BIG_TWO, ["builder", "skeptic"], 1),
+    "diverse_three": (THREE, PERSONA_CYCLE, 1),
+}
 
-def _suite() -> List[Dict[str, object]]:
-    return [
-        # B1: two big models talking -- do they collapse? (floor + injection)
-        dict(scenario="two_floor", agents=BIG_TWO, personas=None,
-             memory=1, inject=None),
-        dict(scenario="two_inject", agents=BIG_TWO, personas=None,
-             memory=1, inject="every_5"),
-        # B2: memory -- same, but agents remember the whole conversation
-        dict(scenario="two_memory_inject", agents=BIG_TWO, personas=None,
-             memory=None, inject="every_5"),
-        # B3: three agents together
-        dict(scenario="three_inject", agents=THREE, personas=None,
-             memory=1, inject="every_5"),
-        # C: persona diversity (Diversity paper) -- does it prevent collapse?
-        dict(scenario="diverse_floor", agents=BIG_TWO,
-             personas=["builder", "skeptic"], memory=1, inject=None),
-        dict(scenario="diverse_three_floor", agents=THREE,
-             personas=PERSONA_CYCLE, memory=1, inject=None),
-        dict(scenario="diverse_inject", agents=THREE,
-             personas=PERSONA_CYCLE, memory=1, inject="every_5"),
-    ]
+# Injection timings applied to every base config: none (floor) + both the
+# steady drip and the after-collapse rescue.
+INJECT_MODES = [None, "every_5", "after_collapse"]
+
+
+def _suite(seeds: int) -> List[Dict[str, object]]:
+    """floor + every_5 + after_collapse for each base config, across seeds."""
+    specs: List[Dict[str, object]] = []
+    for seed in range(seeds):
+        for base, (agents, personas, memory) in BASE_CONFIGS.items():
+            for mode in INJECT_MODES:
+                tag = mode or "floor"
+                specs.append(dict(
+                    scenario=f"{base}_{tag}",
+                    agents=agents, personas=personas, memory=memory,
+                    inject=mode, seed=seed,
+                ))
+    return specs
 
 
 def _run_one(
-    spec: Dict[str, object], temp: float, max_iters: int, seed: int,
+    spec: Dict[str, object], temp: float, max_iters: int,
     stochastic: bool, make_plots: bool, study_root: str,
 ) -> Dict[str, object]:
     model_keys = list(spec["agents"])  # type: ignore[arg-type]
     personas = spec["personas"]
     memory = spec["memory"]
     inject_timing = spec["inject"]
+    seed = int(spec["seed"])
     size = InjectionSize.PARAGRAPH
     injection = (
         _make_injection(size, str(inject_timing), seed)
@@ -217,6 +226,7 @@ def _run_one(
 
     return {
         "scenario": spec["scenario"],
+        "seed": seed,
         "agents": "+".join(model_keys),
         "personas": "+".join(personas) if personas else "none",
         "memory": "full" if memory is None else memory,
@@ -245,7 +255,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--temp", type=float, default=0.7)
     ap.add_argument("--max-iters", type=int, default=40)
-    ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--seeds", type=int, default=2,
+                    help="number of starting-conversation seeds per scenario")
     ap.add_argument("--workers", type=int, default=4)
     ap.add_argument("--stochastic", action="store_true")
     ap.add_argument("--no-plots", action="store_true")
@@ -254,23 +265,26 @@ def main() -> None:
 
     study_root = os.path.dirname(args.out)
     os.makedirs(study_root, exist_ok=True)
-    specs = _suite()
-    print(f"[multiagent] {len(specs)} scenarios: "
-          + ", ".join(str(s["scenario"]) for s in specs))
+    specs = _suite(args.seeds)
+    print(f"[multiagent] {len(BASE_CONFIGS)} configs x {len(INJECT_MODES)} "
+          f"inject-modes x {args.seeds} seeds = {len(specs)} runs")
 
-    # Resume: skip scenarios already in the summary.
+    # Resume: skip (scenario, seed) cells already in the summary.
     rows: List[Dict[str, object]] = []
     if os.path.exists(args.out):
         with open(args.out) as f:
             rows = list(csv.DictReader(f))
-        done = {r["scenario"] for r in rows}
-        specs = [s for s in specs if str(s["scenario"]) not in done]
-        print(f"[multiagent] resume: {len(specs)} scenarios left")
+        done = {(r["scenario"], str(r["seed"])) for r in rows}
+        specs = [
+            s for s in specs
+            if (str(s["scenario"]), str(s["seed"])) not in done
+        ]
+        print(f"[multiagent] resume: {len(specs)} runs left")
 
     make_plots = not args.no_plots
     with ThreadPoolExecutor(max_workers=args.workers) as ex:
         futs = {
-            ex.submit(_run_one, s, args.temp, args.max_iters, args.seed,
+            ex.submit(_run_one, s, args.temp, args.max_iters,
                       args.stochastic, make_plots, study_root): s
             for s in specs
         }
