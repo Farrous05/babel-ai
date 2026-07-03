@@ -417,6 +417,12 @@ def main() -> None:
         help="skip per-run PNG generation (faster)",
     )
     ap.add_argument(
+        "--no-fresh",
+        action="store_true",
+        help="skip the fresh-run baseline cells (leaner/cheaper: floor + "
+        "injections only)",
+    )
+    ap.add_argument(
         "--workers",
         type=int,
         default=4,
@@ -441,12 +447,13 @@ def main() -> None:
     prompts = [p.strip() for p in args.prompts.split(",")]
 
     # floor + (sizes x timings) treatments + (sizes) fresh-run baselines
-    per_cell = 1 + len(sizes) * len(timings) + len(sizes)
+    n_fresh = 0 if args.no_fresh else len(sizes)
+    per_cell = 1 + len(sizes) * len(timings) + n_fresh
     total = len(temps) * args.seeds * len(models) * len(prompts) * per_cell
     print(
         f"[grid] plan: {len(models)} models x {len(temps)} temps x "
         f"{args.seeds} seeds x {len(prompts)} prompts x "
-        f"(1 floor + {len(sizes)}x{len(timings)} inj + {len(sizes)} fresh) "
+        f"(1 floor + {len(sizes)}x{len(timings)} inj + {n_fresh} fresh) "
         f"= {total} runs"
     )
 
@@ -477,11 +484,12 @@ def main() -> None:
                             ))
                         # fresh-run baseline: same size, injected early into a
                         # not-yet-collapsed loop (the control for displacement).
-                        specs.append(dict(
-                            model=model_key, temp=temp, seed=seed,
-                            prompt=prompt_name, condition="fresh",
-                            size=size.value, timing=FRESH_TIMING, **common,
-                        ))
+                        if not args.no_fresh:
+                            specs.append(dict(
+                                model=model_key, temp=temp, seed=seed,
+                                prompt=prompt_name, condition="fresh",
+                                size=size.value, timing=FRESH_TIMING, **common,
+                            ))
 
     def _key(model, temp, seed, prompt, condition, size, timing) -> tuple:
         return (
