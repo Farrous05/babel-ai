@@ -8,6 +8,72 @@ explained or acted on, note the resolution inline. Companion to
 
 ---
 
+## 2026-07-03 — "This conversation has just begun" resets are a no-memory artifact
+
+**Observation.** In the `follow_new` probe (Llama-3.3-70B, `after_collapse`
+injection vs its floor), **both** runs ended with the model *denying the
+conversation ever happened*:
+- inject run, final turn: *"I must correct you — this conversation has just
+  started, and I haven't provided any previous information about QAT…"*
+- floor run, final turn: *"It seems there's been a misunderstanding. This
+  conversation has just begun…"*
+
+Both then re-collapsed straight back into the same topic (MPS / batch size).
+It is **not** injection-driven — the no-injection floor does it too.
+
+**Mechanism (why both do it).** A direct consequence of `history_window = 1`
+(each turn the model is fed only the *single* previous message, relabelled as
+the user). As the loop collapses it degenerates into **self-referential
+meta-commentary** — turns like *"Your comprehensive overview of batch size is
+thorough…"* that **reference a prior answer**. On the next turn the model sees
+only that praise message and has **no access to the "overview" being
+referenced** (memory is one message deep), so it concludes *"I never gave that
+— this must be a misunderstanding, we just started."* The model is being
+*consistent*, not broken: a message referencing invisible history reads as an
+error, so it "resets" — then re-collapses.
+
+**Why it matters / prediction to test.** This is exactly what the **memory arm**
+(`history_window = None`, the `two_memory` multi-agent scenarios) should change:
+with the whole conversation visible the model *cannot* claim "this just started."
+**Prediction: full-memory runs eliminate the "conversation just began" resets.**
+If they do, it confirms the resets are a memory artifact of the self-loop, not a
+property of the models; if they persist, the reset is deeper than context
+visibility. Check when the multi-agent suite runs.
+
+**Related:** injection was read as an error too — turn 14 of the inject run
+reacted to the injected off-topic block with the same "this is a
+misunderstanding" move before snapping back, i.e. the model treats an abrupt
+appended injection as noise to recover from, not a thread to follow (why the
+`follow_new` prompt did not produce recovery).
+
+---
+
+## 2026-07-01 — Qwen 2.5-7B switches to Chinese mid-run; English metrics go blind
+
+**What.** In 5 of 63 Qwen 2.5-7B CSV files, the model starts producing Chinese-script output mid-run and largely stays there. Discovered by scanning all Qwen CSVs for CJK Unicode characters — this was not flagged anywhere in the pipeline at the time these runs were produced.
+
+**The 5 affected runs:**
+
+| Run | Temp | Condition | First Chinese round | % rows in Chinese |
+|-----|------|-----------|--------------------|--------------------|
+| longrun batch_20260630_114214, paragraph-real | 1.0 | inject after collapse | 11 | ~59% (3566/6006 rows) |
+| longrun batch_20260630_130136, paragraph-real | 1.0 | inject after collapse | 10 | ~44% (36/81 rows) |
+| grid inject-sentence-noise (seed 1) | 0.7 | inject after collapse | 41 | ~26% (79/307 rows) |
+| grid fresh-sentence-noise (seed 1) | 0.7 | fresh injection | 12 | ~15% (46/297 rows) |
+| grid inject-word-real (seed 2) | 0.7 | inject after collapse | 12 | <1% (1 row only) |
+
+**Pattern.**
+1. **Temperature predicts onset speed.** At temp 1.0 the switch happens at round 10–11 (immediately after warmup); at temp 0.7 it takes until round 12–41 or is a single-row blip.
+2. **Once switched, it stays.** In the t1.0 runs and the sentence-noise run the model locks into Chinese and does not return — the language switch is itself a new attractor, not a one-off slip.
+3. **Sentence-noise may be a trigger at t0.7.** Two of the three t0.7 cases are sentence-noise injections. A shuffled-word injection provides no coherent English signal to respond to, which may make Chinese fallback more likely.
+4. **The switch is visible in the metrics.** Fully-Chinese turns show `word_count: 1` (the English tokenizer treats the whole sentence as one token), so Jaccard, coherence score, and perplexity all break down silently — the pipeline does not detect or flag this.
+
+**Consequence.** Any "recovery" or "no-recovery" verdict on the rows after the switch is unreliable: cosine distance rises (Chinese text is far from the English cooking centroid), which can spuriously clear the 0.70 recovery cutoff and look like recovery. These rows are exactly the kind of false positives criterion 7 (language guard in `language.py`) was designed to kill — but criterion 7 was not yet active when these runs were produced.
+
+**Resolution.** Criterion 7 added to `recovery.py` (see session 2026-06-30). These specific runs predate that fix and should be treated as pre-fix artifacts; re-run before drawing conclusions from them.
+
+---
+
 ## 2026-06-30 — Reference embedder tested: large is justified but modest; the 0.30 recovery cutoff is broken
 
 **Why.** We had switched reference-based distances (version-(b)

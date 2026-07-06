@@ -322,3 +322,10 @@ results/
 /doc/Maiti_et_al.md
 /doc/Multi_LLM.md
 /doc/Shumailov.md
+
+
+#simple inference test script 
+/analysis/test.py
+
+#fable plan
+/doc/fable.md

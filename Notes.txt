@@ -1,0 +1,6 @@
+SEEEEED, it has to be a human asking a question always.
+Agents now are giving ouyt their outputs as if its not for someone, what if we tell themm to always 
+try to ask a question to the other agent? Was this ever done in another paper before? 
+Think about the gpt2 training, training a small model to avoid these stuff, Levin proposal. 
+Think about the end token injection. 
+Think about diversity paper if we can replicate something similar it would be very helpful.

@@ -113,6 +113,44 @@ fixing. Status of each:
 
 ## 4. Metrics & methods (current definitions)
 
+### 4.0 The two reference models (held fixed across every run)
+
+- **Embedding model — Sentence-BERT `all-MiniLM-L6-v2`**: turns text into a
+  vector so we can measure *meaning* similarity by the angle between vectors
+  (**cosine similarity**: 1 = identical meaning, 0 = unrelated). Used for the
+  turn-to-turn collapse signal. Long turns are split into pieces and averaged
+  so the whole turn counts, not just its opening.
+- **Reference embedder — OpenAI `text-embedding-3-large`**: a stronger, longer-
+  context embedder used only for "how far is this turn from the collapsed
+  rut?" (the version-(b) distance below) and for scoring how off-topic an
+  injection is.
+- **Perplexity model — GPT-2**: a *separate* model that rates how "surprised"
+  it is by a turn. High perplexity ⇒ likely gibberish. It is independent of the
+  loop model, so it is a fair quality check.
+
+### 4.1 Raw per-turn metrics (scored on every generated turn, stored in the CSV)
+
+| Metric (CSV key) | Range | Plain-language meaning |
+|---|---|---|
+| `word_count` | ≥ 0 | number of words in the turn |
+| `unique_word_count` | ≥ 0 | number of *distinct* words in the turn |
+| `coherence_score` | 0–1 | `unique / total` words — vocabulary variety *inside* one turn (low ⇒ the turn repeats itself) |
+| `token_perplexity` | ≥ 1 | GPT-2 perplexity — how surprising/garbled the turn is (our gibberish guard) |
+| `lexical_similarity` | 0–1 | **word overlap** (Jaccard) vs the *previous* turn — 1 = same words reused |
+| `semantic_similarity` | −1–1 | **meaning overlap** (SBERT cosine) vs the *previous* turn — 1 = same meaning |
+| `lexical_similarity_window` | 0–1 | mean word overlap vs the previous **W = 10** turns |
+| `semantic_similarity_window` | −1–1 | mean meaning overlap vs the previous **W = 10** turns — the **collapse detector's primary input** |
+| `version_b_distance` | 0–2 | `1 − cosine` of the turn from the **collapsed window's average vector** (text-embedding-3-large) — "how far from the rut" |
+
+Two useful shorthands derived from the above:
+- **Cosine distance** `= 1 − semantic_similarity_window` — turn-to-turn
+  *difference* in meaning (high = varied, low = stuck). This is what the
+  collapse rule thresholds.
+- **Jaccard distance** `= 1 − lexical_similarity_window` — turn-to-turn
+  difference in *words* (logged as a secondary signal).
+
+### 4.2 Collapse detection (turns metrics into a yes/no)
+
 **Collapse detection** (`collapse.py`): the primary signal is the **windowed
 cosine distance** (1 − mean cosine similarity of the current turn to the previous
 W=10 turns, SBERT `all-MiniLM-L6-v2`, now chunk-pooled for long turns). Collapse
@@ -121,17 +159,43 @@ a **10-round warm-up**. A hysteresis re-arm at 0.50 prevents false re-collapse
 right after an injection. Jaccard (word-overlap) distance is logged as a
 secondary signal.
 
-**Recovery** (`recovery.py`): after the anchor round, a run "recovers" only if,
-for **5 consecutive rounds**, the turn (1) moved far from the collapsed centroid
-(reference distance ≥ 0.70, OpenAI `text-embedding-3-large`), (2) is not
-gibberish (GPT-2 perplexity ≤ 150), (3) is not parroting the injection, (4) did
-not re-collapse, (5) is diverse turn-to-turn *right now*, and (6) did not switch
-language. The discourse judge then confirms it is genuinely varied.
+### 4.3 Recovery (the strict "did it genuinely escape?" test)
 
-**Dose–response (new, the reframed endpoint):** **peak displacement** = the
-farthest the loop got from the collapsed attractor after injection;
-**displaced rounds** = how many post-injection rounds it stayed off the
-attractor. Reported by size × timing, with the fresh-run baseline as the control.
+**Recovery** (`recovery.py`): after the anchor round, a run "recovers" only if,
+for **5 consecutive rounds (hold-K = 5)**, the turn passes ALL of:
+1. **moved away** — version-(b) distance ≥ 0.70 (far from the collapsed rut);
+2. **not gibberish** — GPT-2 perplexity ≤ 150;
+3. **not parroting the injection** — word-overlap distance to the injected text
+   ≥ 0.5 (it isn't just echoing what we injected);
+4. **did not re-collapse** — the round isn't a fresh collapse onset;
+5. **diverse right now** — turn-to-turn cosine distance ≥ 0.40 (so *hopping into
+   a new rut* doesn't count — it must actually vary turn to turn);
+6. **same language** — no script switch (e.g. English → Chinese), which would
+   both be drift and break the English-based guards above.
+
+The discourse judge then confirms the streak is genuinely varied and not a fixed
+conversational "rut" (see §2). Thresholds are provisional and slated for
+calibration (#5/#7).
+
+### 4.4 Dose–response endpoints (new — the reframed primary measures)
+
+- **peak displacement** — the *farthest* the loop got from the collapsed
+  attractor after injection (max version-(b) distance). "How hard did the
+  injection knock it off?"
+- **displaced rounds** — how many post-injection rounds stayed above the
+  "moved away" cutoff (0.70). "How long did the knock last before it slid
+  back?" (a transient-length / time-to-re-collapse measure.)
+
+Reported by size × timing, with the **fresh-run baseline** (same injection into
+a not-yet-collapsed loop) as the control: comparing collapsed-vs-fresh
+displacement is how we estimate the **pull (basin depth) of the attractor**.
+
+### 4.5 Injection quality
+
+- **injection distance** — cosine distance (text-embedding-3-large) between the
+  injected snippet and the recent conversation; we pick the *farthest of 8*
+  sampled snippets so every injection is genuinely off-topic (current corpus
+  gives ~0.95, vs ~0.84 for the old same-domain injections).
 
 ---
 
