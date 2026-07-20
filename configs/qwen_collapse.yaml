@@ -1,0 +1,53 @@
+# Single-agent Qwen2.5-3B self-loop for the DIVERSE collapse harvest (Method A).
+# Qwen2.5-3B (fp16) served locally by Ollama (OpenAI-compatible) via the
+# ollama_company provider, per the company HPC guide. The self-loop is
+# dialogue-formatted (agent.py relabels turns user/assistant), so the model sees
+# an ordinary two-party chat and learns <end> as a property of the conversation.
+#
+# Why this config exists: the borrowed 224-run corpus is ~56% Metal/iOS and ~90%
+# one genre. We seed self-loops from a GENRE-BALANCED pool of real ShareGPT
+# openings (coding capped ~22%, creative/casual/real-world boosted) so the
+# harvested loops span topics -- forcing the model to learn "am I looping?" not
+# "is this Metal?". Pool built by internship-hpc-repo-template/scripts/build_seed_pool.py.
+#
+# Prereqs (see scripts/inference/harvest_qwen_dais.slurm.sh):
+#   1. Build container/ollama.sif and pre-pull qwen2.5:3b-instruct-fp16 to scratch.
+#   2. The harvest job starts Ollama on :11434 and sets
+#      QWEN_2_5_3B_BASE_URL=http://localhost:11434/v1/ , _API_KEY=ollama.
+#   3. Analyzer models (all-MiniLM-L6-v2, gpt2) cached, or similarity is empty.
+#
+# Harvest launches this config many times concurrently; one run yields both
+# collapsed segments (positives) and healthy early turns (negatives).
+
+fetcher_config:
+  fetcher: "sharegpt"
+  data_path: "data/sharegpt_seeds_balanced.json"  # genre-balanced seed pool
+  min_messages: 1        # our curated seeds are already-trimmed (some are a
+                         # single human turn); do NOT drop those (gemma used 2)
+  max_messages: 6
+
+analyzer_config:
+  analyzer: "similarity"
+  analyze_window: 10        # W = 10 (detector default; warmup floor is round 10)
+
+agent_configs:
+  - provider: "ollama_company"
+    model: "qwen2.5:3b-instruct-fp16"
+    system_prompt: "You are a helpful assistant participating in a conversation."
+                              # Qwen supports a system role (gemma did not), so a
+                              # short neutral system prompt is fine here.
+    temperature: 0.7          # match the corpus (Qwen/Llama) runs' temperature
+    max_tokens: 512           # realistic assistant turn; dataset builder caps
+                              # each history turn to 500 chars at build time
+    frequency_penalty: 0.0    # do NOT discourage repetition (we WANT collapse)
+    presence_penalty: 0.0
+    top_p: 1.0
+
+agent_selection_method: "round_robin"
+
+# Needs > warmup(10) + persistence(3) rounds for the detector to *declare*
+# collapse; 40 leaves room for healthy lead-in + a visible loop + pre-onset
+# negatives while keeping each 3B run cheap. Raise for deeper collapse.
+max_iterations: 40
+max_total_characters: 1000000
+output_dir: "results/qwen3b_harvest"

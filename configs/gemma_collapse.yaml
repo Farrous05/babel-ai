@@ -1,0 +1,46 @@
+# Single-agent gemma self-loop for harvesting collapse data (project Step 1/3).
+# gemma4:31b-it-bf16 served locally by Ollama (OpenAI-compatible) via the
+# ollama_company provider, per the company HPC guide. The self-loop is
+# dialogue-formatted (agent.py relabels turns user/assistant), so the model sees
+# an ordinary two-party chat and learns <end> as a property of the conversation,
+# not of authorship.
+#
+# Prereqs (see scripts/inference/harvest_gemma_dais.slurm.sh):
+#   1. Build container/ollama.sif and pre-pull gemma4:31b-it-bf16 to scratch.
+#   2. The harvest job starts Ollama on :11434 and sets
+#      GEMMA_4_31B_IT_BASE_URL=http://localhost:11434/v1/ , _API_KEY=ollama.
+#
+# Harvest launches this config many times concurrently; one run yields both
+# collapsed segments (positives) and healthy early turns (negatives).
+
+fetcher_config:
+  fetcher: "sharegpt"
+  data_path: "data/sharegpt_real.json"   # short real seed, then pure self-loop
+  min_messages: 2
+  max_messages: 6
+
+analyzer_config:
+  analyzer: "similarity"
+  analyze_window: 10        # W = 10 (detector default; warmup floor is round 10)
+
+agent_configs:
+  - provider: "ollama_company"
+    model: "gemma4:31b-it-bf16"
+    system_prompt: "You are a helpful assistant participating in a conversation."         # gemma's chat template has NO system role; setting
+                              # one confuses it (empty/odd turns). Leave blank
+                              # (this is a gemma necessity, not a stat choice).
+    temperature: 0.7          # match the corpus (Qwen/Llama) runs' temperature
+    max_tokens: 512           # realistic assistant turn (~380 words); tune vs
+                              # training max_length (turn_len x W_ctx must fit)
+    frequency_penalty: 0.0    # do NOT discourage repetition
+    presence_penalty: 0.0
+    top_p: 1.0
+
+agent_selection_method: "round_robin"
+
+# Needs > warmup(10) + persistence(3) rounds for the detector to *declare*
+# collapse; 30 leaves room for healthy lead-in + a visible loop + pre-onset
+# negatives. Raise for deeper collapse, lower for cheaper batches.
+max_iterations: 120
+max_total_characters: 1000000
+output_dir: "results/gemma_harvest"

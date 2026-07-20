@@ -163,6 +163,15 @@ class Experiment:
 
         # update metadata
         self.metadata.num_fetcher_messages = len(self.messages)
+        # Seed provenance, when the fetcher tracks it (ShareGPT does; the
+        # random/other fetchers have no corpus, so getattr defaults to None).
+        # This is the ONLY record of which seed produced this run.
+        self.metadata.seed_id = getattr(
+            self.prompt_fetcher, "last_seed_id", None
+        )
+        self.metadata.seed_index = getattr(
+            self.prompt_fetcher, "last_seed_index", None
+        )
 
     def run(
         self,
@@ -687,7 +696,10 @@ class Experiment:
             cond = f"{kind}-{inj.size.value}{src}"
 
         ts = metadata.timestamp.strftime("%m%d-%H%M%S")
-        return f"run_{model_part}_{temp_part}_{seed_part}_{cond}_{ts}"
+        # Short uuid suffix so concurrent runs launched in the same second (e.g.
+        # a batched harvest) get distinct folders instead of clobbering.
+        uniq = str(self.uuid)[:8]
+        return f"run_{model_part}_{temp_part}_{seed_part}_{cond}_{ts}_{uniq}"
 
     def _generate_pdf(
         self, csv_path: Path, meta_path: Path, pdf_path: Path

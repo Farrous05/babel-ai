@@ -2,6 +2,7 @@
 
 import logging
 import threading
+from collections import OrderedDict
 from abc import ABC, abstractmethod
 from typing import List, Optional, Tuple
 
@@ -91,6 +92,12 @@ class SimilarityAnalyzer(Analyzer):
             f"with analyze_window: {analyze_window}"
         )
         self.analyze_window = analyze_window
+        # Embedding cache (text -> tensor). Every turn re-compares against the
+        # whole window, so without this each text is re-embedded ~analyze_window
+        # times. Same text always yields the same embedding, so caching is exact,
+        # not an approximation. Bounded LRU: we only ever look back `window` turns.
+        self._emb_cache: "OrderedDict[str, object]" = OrderedDict()
+        self._emb_cache_max = max(64, 4 * analyze_window)
 
     def _analyze_word_stats(self, text: str) -> Tuple[int, int, float]:
         """Analyze basic word statistics of the text.
@@ -198,24 +205,39 @@ class SimilarityAnalyzer(Analyzer):
         HuggingFace fast tokenizers are NOT thread-safe (concurrent use raises
         ``RuntimeError: Already borrowed``). Grid runs score turns from several
         worker threads at once, so all tokenizer/encode access is serialized
-        under ``_embed_lock``. Embedding is cheap next to generation (the slow,
-        network-bound, still-parallel step), so this is not a bottleneck.
+        under ``_embed_lock``.
+
+        Embeddings are CACHED per text. The old note here said "embedding is cheap
+        next to generation (the slow, network-bound step)" -- true when generation
+        was a remote API call. With Ollama served locally on the GPU, generation got
+        ~100x faster and embedding became the bottleneck: every turn re-compares
+        against the whole window, so each text was being encoded ~window times.
+        The cache makes it once; same text -> same embedding, so this is exact.
         """
+        cached = self._emb_cache.get(text)
+        if cached is not None:
+            self._emb_cache.move_to_end(text)
+            return cached
         with self._embed_lock:
             tokenizer = self.semantic_model.tokenizer
             max_len = int(self.semantic_model.max_seq_length or 256)
             budget = max(1, max_len - 2)  # leave room for special tokens
             ids = tokenizer.encode(text, add_special_tokens=False)
             if len(ids) <= budget:
-                return self.semantic_model.encode(text, convert_to_tensor=True)
-            chunks = [
-                tokenizer.decode(ids[i : i + budget])
-                for i in range(0, len(ids), budget)
-            ]
-            chunk_embeddings = self.semantic_model.encode(
-                chunks, convert_to_tensor=True
-            )
-            return chunk_embeddings.mean(dim=0)
+                emb = self.semantic_model.encode(text, convert_to_tensor=True)
+            else:
+                chunks = [
+                    tokenizer.decode(ids[i : i + budget])
+                    for i in range(0, len(ids), budget)
+                ]
+                chunk_embeddings = self.semantic_model.encode(
+                    chunks, convert_to_tensor=True
+                )
+                emb = chunk_embeddings.mean(dim=0)
+        self._emb_cache[text] = emb
+        if len(self._emb_cache) > self._emb_cache_max:
+            self._emb_cache.popitem(last=False)   # evict oldest
+        return emb
 
     def _analyze_semantic_similarity(
         self, outputs: List[str], window_size: int = 1

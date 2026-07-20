@@ -158,6 +158,16 @@ class OllamaCompanyModels(Enum):
     QWEN_2_5_72B = "Qwen/Qwen2.5-72B-Instruct"
     QWEN_2_5_7B = "Qwen/Qwen2.5-7B-Instruct"
     LLAMA_3_2_3B = "meta-llama/Llama-3.2-3B-Instruct"
+    # Project target model, served locally by Ollama on the H200 (company guide).
+    # bf16 = full precision (63GB) so it MATCHES the model we fine-tune -- NOT the
+    # default `gemma4:31b` which is Q4_K_M quantized. Value must equal the pulled
+    # Ollama tag. Endpoint via GEMMA_4_31B_IT_BASE_URL / _API_KEY in .env.
+    GEMMA_4_31B_IT = "gemma4:31b-it-bf16"
+    # PoC harvest model: Qwen2.5-3B served locally by Ollama for the diverse
+    # self-loop collapse harvest (fp16 to match the HF weights we fine-tune).
+    # Value = the pulled Ollama tag; endpoint set at runtime by the harvest job
+    # (QWEN_2_5_3B_BASE_URL=http://localhost:11434/v1/, _API_KEY=ollama).
+    QWEN_2_5_3B = "qwen2.5:3b-instruct-fp16"
 
 
 class AzureModels(Enum):

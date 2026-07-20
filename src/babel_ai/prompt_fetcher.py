@@ -1,7 +1,9 @@
 """Prompt fetcher classes for LLM drift experiments."""
 
+import itertools
 import json
 import logging
+import os
 import random
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -12,6 +14,16 @@ import requests
 from babel_ai.enums import FetcherType
 
 logger = logging.getLogger(__name__)
+
+# Parsed seed corpora, keyed by data_path. One Experiment == one fetcher
+# instance, so at 10k runs an uncached 29MB seeds file is re-parsed 10,000
+# times (~156ms each = ~26 CPU-minutes). The file is read-only, so cache it.
+_CORPUS_CACHE: Dict[str, List] = {}
+
+# Hands out successive seed indices within one process. Experiment.__init__ is
+# synchronous and runs in the event loop before its asyncio.to_thread, so the
+# 50 experiments of one main.py invocation increment this serially -- no lock.
+_seed_counter = itertools.count()
 
 
 class BasePromptFetcher(ABC):
@@ -228,10 +240,27 @@ class ShareGPTConversationFetcher(BasePromptFetcher):
         self.data_path = data_path
         self.min_messages = min_messages
         self.max_messages = max_messages
+        # Provenance of the conversation this fetcher handed out. One fetcher
+        # per Experiment, so this identifies that run's seed. Experiment copies
+        # it into the run metadata -- without it there is no way to know which
+        # seed produced which run (run dirs are named by uuid, and the runs of a
+        # chunk finish out of order, so the SEED_OFFSET index is not recoverable
+        # after the fact).
+        self.last_seed_id: Optional[str] = None
+        self.last_seed_index: Optional[int] = None
         self._load_data()
 
     def _load_data(self) -> None:
         """Load and preprocess the ShareGPT dataset."""
+        cache_key = (
+            f"{self.data_path}|{self.min_messages}|{self.max_messages}"
+        )
+        cached = _CORPUS_CACHE.get(cache_key)
+        if cached is not None:
+            self.conversations, self.conversation_ids = cached
+            logger.debug(f"Reusing cached corpus for {self.data_path}")
+            return
+
         logger.info(f"Loading data from {self.data_path}")
 
         with open(self.data_path, "r") as f:
@@ -239,14 +268,20 @@ class ShareGPTConversationFetcher(BasePromptFetcher):
 
         logger.debug(f"Loaded data from {self.data_path}")
 
-        # Extract items and filter for conversation length
-        self.conversations = [d["items"] for d in data]
-        self.conversations = [
-            conv
-            for conv in self.conversations
-            if len(conv) >= self.min_messages
-            and (self.max_messages is None or len(conv) <= self.max_messages)
+        # Extract items and filter for conversation length. Ids are kept
+        # alongside (parallel list) so a run can be traced back to its seed.
+        kept = [
+            d
+            for d in data
+            if len(d["items"]) >= self.min_messages
+            and (
+                self.max_messages is None
+                or len(d["items"]) <= self.max_messages
+            )
         ]
+        self.conversations = [d["items"] for d in kept]
+        self.conversation_ids = [d.get("id") for d in kept]
+        _CORPUS_CACHE[cache_key] = (self.conversations, self.conversation_ids)
         logger.debug(f"Loaded {len(self.conversations)} conversations")
 
     def get_conversation(self) -> List[Dict[str, str]]:
@@ -261,8 +296,33 @@ class ShareGPTConversationFetcher(BasePromptFetcher):
         """
         logger.info("Getting conversation from ShareGPTConversationFetcher")
         logger.debug(f"Available conversations: {len(self.conversations)}")
-        # Select random conversation
-        conversation = random.choice(self.conversations)
+
+        # SEED_OFFSET set => walk the corpus instead of sampling it. Each
+        # Experiment builds its own fetcher and draws exactly one conversation,
+        # so plain random.choice samples WITH replacement: 10k draws over a 10k
+        # corpus touch only ~63% of it and repeat some seeds 3-4x. The harvest
+        # exports a distinct SEED_OFFSET per chunk, so offset + local counter is
+        # a globally unique index across every worker process => 1 run per seed.
+        # Unset (any other experiment) keeps the original sampling behaviour.
+        if not self.conversations:
+            # Matches random.choice([]) -- the behaviour before index selection
+            # was factored out. Callers (and tests) rely on IndexError here.
+            raise IndexError("no conversations match the fetcher's filters")
+
+        offset_env = os.environ.get("SEED_OFFSET")
+        if offset_env is not None:
+            idx = (int(offset_env) + next(_seed_counter)) % len(
+                self.conversations
+            )
+            logger.debug(f"Seed index {idx} (SEED_OFFSET={offset_env})")
+        else:
+            idx = random.randrange(len(self.conversations))
+
+        conversation = self.conversations[idx]
+        # Record provenance BEFORE the trimming below mutates the messages.
+        self.last_seed_index = idx
+        self.last_seed_id = self.conversation_ids[idx]
+        logger.debug(f"Seed id {self.last_seed_id} (index {idx})")
 
         # Convert ShareGPT format to LLMProvider format
         messages = []

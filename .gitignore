@@ -318,6 +318,7 @@ results/
 /doc/how_to_read_graphs.md
 /doc/Diversity.md
 
+
 # Full transcriptions of copyrighted papers (kept local; cited in doc/references.md)
 /doc/Maiti_et_al.md
 /doc/Multi_LLM.md
@@ -329,3 +330,7 @@ results/
 
 #fable plan
 /doc/fable.md
+# symlink to scratch job output (results live on the cluster FS, not git)
+results_scratch
+.nv/
+.ollama/

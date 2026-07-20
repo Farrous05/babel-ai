@@ -227,6 +227,8 @@ class ExperimentMetadata(BaseModel):
         num_iterations_total: Total number of iterations completed
             (includes both fetcher and agent-generated messages)
         num_fetcher_messages: Number of initial messages from fetcher
+        seed_id: Id of the seed conversation this run started from
+        seed_index: Index of that seed within the fetcher's corpus
         total_characters: Total character count across all messages
 
     Example:
@@ -249,6 +251,19 @@ class ExperimentMetadata(BaseModel):
     config: ExperimentConfig
     num_iterations_total: Optional[int] = None
     num_fetcher_messages: Optional[int] = None
+    # Seed provenance. Without this a run cannot be traced back to the seed it
+    # started from: run dirs are named by uuid, and the runs of a chunk finish
+    # out of order, so the fetcher's index is unrecoverable after the fact.
+    # Needed to seed the healthy NEGATIVES from the same subjects that actually
+    # produced positives -- otherwise topic predicts the class.
+    seed_id: Optional[str] = Field(
+        default=None,
+        description="Id of the seed conversation this run started from",
+    )
+    seed_index: Optional[int] = Field(
+        default=None,
+        description="Index of that seed within the fetcher's corpus",
+    )
     total_characters: Optional[int] = None
     # Collapse detection (see babel_ai/collapse.py). Round indices count from
     # the first self-loop turn (0 = first agent-generated message).

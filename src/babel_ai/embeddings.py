@@ -1,10 +1,11 @@
-"""OpenAI text-embedding backend (drop-in for the SBERT semantic model).
+"""Reference embedder for reference-based distance metrics.
 
-The Multi-LLM paper embeds text with OpenAI ``text-embedding-3-large``; we match
-that. This exposes an ``encode()`` with the same signature/return as the
-sentence-transformers model (a ``torch.Tensor``), so ``analyzer.py``,
-``injection.py`` and ``recovery.py`` keep working unchanged (``cos_sim``,
-``.mean(dim=0)``, ``.item()`` all still apply).
+``reference_embedder()`` returns a LOCAL bge-large-en-v1.5 by default (see the
+note there); the ``OpenAIEmbedder`` below is the legacy text-embedding-3-large
+backend, kept as an opt-in fallback (REFERENCE_EMBEDDER=openai). Both expose an
+``encode()`` with the same signature/return as the sentence-transformers model
+(a ``torch.Tensor``), so ``analyzer.py``, ``injection.py`` and ``recovery.py``
+keep working unchanged (``cos_sim``, ``.mean(dim=0)``, ``.item()`` all apply).
 
 Why switch from SBERT (all-MiniLM-L6-v2):
   * **No truncation** — SBERT reads only the first 256 tokens; our free-gen
@@ -79,16 +80,40 @@ class OpenAIEmbedder:
 
 
 # Shared reference embedder for *reference-based* distances (version-(b) =
-# distance-from-collapsed-window, and injection distance). text-embedding-3-
-# large is strong here (it separates content that genuinely differs from a far
-# reference). It is NOT used for the turn-to-turn collapse detector, where its
-# same-domain compression hurts separation -- that stays on SBERT (analyzer.py).
-_REFERENCE: "OpenAIEmbedder | None" = None
+# distance-from-collapsed-window, and injection distance). It is NOT used for the
+# turn-to-turn collapse detector -- that stays on SBERT MiniLM (analyzer.py).
+#
+# LOCAL as of 2026-07-20: was OpenAI text-embedding-3-large, but that key is out
+# of quota and, more importantly, a paid network call inside the 24h harvest is a
+# single point of failure (it 429'd and broke every run in a smoke test). bge-
+# large-en-v1.5 is local, free, already cached, already the dataset builder's
+# embedder, and competitive with text-embedding-3-large on MTEB. It auto-uses
+# CUDA on the harvest node.
+#
+# ONE CAVEAT: the RecoveryConfig cutoffs were calibrated on text-embedding-3-
+# large's distance scale. bge-large's cosine distances differ, so the recovery
+# cutoff needs a re-check (open item; recovery only drops the ~2% "recovered"
+# runs, so the harvest is unblocked regardless). To go back to OpenAI, set
+# REFERENCE_EMBEDDER=openai (needs a funded OPENAI_API_KEY).
+_REFERENCE_MODEL = "BAAI/bge-large-en-v1.5"
+_REFERENCE = None
 
 
-def reference_embedder() -> OpenAIEmbedder:
-    """Lazy singleton OpenAI embedder for reference-based distance metrics."""
+def reference_embedder():
+    """Lazy singleton LOCAL embedder for reference-based distance metrics.
+
+    Returns a SentenceTransformer (or the OpenAIEmbedder if REFERENCE_EMBEDDER=
+    openai). Both expose ``encode(texts, convert_to_tensor=True) -> Tensor`` (1-D
+    for a str, 2-D for a list), so callers in recovery.py / injection.py are
+    unchanged.
+    """
     global _REFERENCE
     if _REFERENCE is None:
-        _REFERENCE = OpenAIEmbedder("text-embedding-3-large")
+        if os.getenv("REFERENCE_EMBEDDER", "local").lower() == "openai":
+            _REFERENCE = OpenAIEmbedder("text-embedding-3-large")
+        else:
+            from sentence_transformers import SentenceTransformer
+
+            _REFERENCE = SentenceTransformer(_REFERENCE_MODEL)
+            logger.info("Local reference embedder ready: %s", _REFERENCE_MODEL)
     return _REFERENCE

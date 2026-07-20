@@ -94,24 +94,49 @@ def company_ollama_request(
         max_tokens,
     )
 
-    try:
-        response = _client(model).chat.completions.create(
-            model=model.value,
-            messages=messages,
-            temperature=temperature,
-            frequency_penalty=frequency_penalty,
-            presence_penalty=presence_penalty,
-            top_p=top_p,
-            max_tokens=max_tokens,
-            seed=seed,
-        )
-        content = response.choices[0].message.content
+    content = ""
+    usage = None
+    for attempt in range(3):
+        try:
+            response = _client(model).chat.completions.create(
+                model=model.value,
+                messages=messages,
+                temperature=temperature,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
+                top_p=top_p,
+                max_tokens=max_tokens,
+                seed=seed,
+            )
+        except Exception as e:
+            logger.error("Error in company Ollama request: %s", str(e))
+            raise
+
+        msg = response.choices[0].message
+        content = msg.content
         usage = response.usage
-        return LLMResponse(
-            content=content,
-            input_token_count=usage.prompt_tokens if usage else 0,
-            output_token_count=usage.completion_tokens if usage else 0,
+        # Some models return empty `content` while putting text in a reasoning
+        # field, or return empty on a confusing self-loop turn. Fall back to the
+        # reasoning field, then retry, so an empty turn can't corrupt the loop.
+        if not content or not content.strip():
+            content = (
+                getattr(msg, "reasoning_content", None)
+                or getattr(msg, "reasoning", None)
+                or content
+            )
+        if content and content.strip():
+            break
+        logger.warning(
+            "Empty content from %s (attempt %d/3); retrying",
+            model.value,
+            attempt + 1,
         )
-    except Exception as e:
-        logger.error("Error in company Ollama request: %s", str(e))
-        raise
+
+    if not content or not content.strip():
+        logger.error("Still empty after retries from %s", model.value)
+
+    return LLMResponse(
+        content=content or "",
+        input_token_count=usage.prompt_tokens if usage else 0,
+        output_token_count=usage.completion_tokens if usage else 0,
+    )
