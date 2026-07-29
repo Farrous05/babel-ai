@@ -334,3 +334,4 @@ results/
 results_scratch
 .nv/
 .ollama/
+container/*.sif

@@ -22,6 +22,7 @@ Date: 2025
 import json
 import logging
 import os
+import re
 import textwrap
 from datetime import datetime
 from pathlib import Path
@@ -225,6 +226,21 @@ class TheaterScriptPDFGenerator:
 
         return role.upper()
 
+    def speaker_label(self, row) -> str:
+        """Readable speaker for the transcript. In multi-agent runs the 'role'
+        column holds the agent-id UUID (unreadable); the MODEL that produced the
+        turn is what a reader actually wants. Pull the model path out of
+        agent_config and show its short name (e.g. 'qwen3b-v4'); fall back to the
+        role for seed/human turns or single-agent runs."""
+        cfg = str(row.get("agent_config", "") or "")
+        m = re.search(r"/([^/'\">]+)['\"]>", cfg)   # last path segment of the model
+        if m:
+            name = m.group(1)
+            for pre in ("end-token-A-", "models--"):
+                name = name.replace(pre, "")
+            return name.upper()
+        return self.format_character_name(str(row.get("role", "N/A")))
+
     def wrap_text(self, text: str, max_width: int = 79) -> str:
         """
         Wrap text to specified width while preserving line breaks.
@@ -416,8 +432,8 @@ class TheaterScriptPDFGenerator:
                 inj_by_iter.setdefault(inj["iteration"], []).append(inj)
 
             for idx, row in df_sorted.iterrows():
-                # Character name
-                character_name = self.format_character_name(row["role"])
+                # Character name — the MODEL that spoke (v3/v4), not the agent-id
+                character_name = self.speaker_label(row)
                 story.append(
                     Paragraph(
                         f"{xml_escape(character_name)}:", self.character_style

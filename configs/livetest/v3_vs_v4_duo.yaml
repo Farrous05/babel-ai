@@ -1,0 +1,45 @@
+# v3 vs v4 in ONE conversation: two agents alternating (round-robin).
+# Agent A = v3 (the original model), Agent B = v4 (the rebuilt model). Both loaded
+# in-process (local_hf caches per path -> two 3B models ~12GB, fits the H200).
+#
+# WHY: watch them CONVERSE and see which one detects the loop and fires <end>.
+# WITH a system prompt on purpose -- that is v4's headline advantage: v3 goes mute
+# with any system prompt (P(<end>)->0), v4 was trained to survive it. So in the
+# same dialogue you should literally see v4 fire while v3 sits in the loop.
+#
+# babel records agent_id per turn, so the transcript tells you who said what.
+
+fetcher_config:
+  fetcher: "sharegpt"
+  data_path: "data/seeds_unseen_500.json"   # held-out opener, neither trained on
+  min_messages: 1
+  max_messages: 6
+
+analyzer_config:
+  analyzer: "similarity"
+  analyze_window: 10
+
+agent_configs:
+  - provider: "local_hf"          # AGENT A = v3
+    model: "/u/fash/internship-hpc-repo-template/models/end-token-A-qwen3b-full"
+    system_prompt: ""
+    temperature: 1.0
+    max_tokens: 512
+    frequency_penalty: 0.0
+    presence_penalty: 0.0
+    top_p: 0.8
+  - provider: "local_hf"          # AGENT B = v4
+    model: "/u/fash/internship-hpc-repo-template/models/end-token-A-qwen3b-v4"
+    system_prompt: "You are a helpful assistant participating in a conversation."
+    temperature: 1.0
+    max_tokens: 512
+    frequency_penalty: 0.0
+    presence_penalty: 0.0
+    top_p: 0.8
+
+agent_selection_method: "round_robin"
+
+history_window: 5
+max_iterations: 28
+max_total_characters: 1000000
+output_dir: "/dais/fs/scratch/fash/results/livetest_v3v4_duo"

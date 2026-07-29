@@ -1,0 +1,65 @@
+# LIVE TEST: the trained <end> model self-conversing INSIDE babel-ai.
+#
+# Same instrumentation as the 10k harvest (analyzer, collapse detector, recovery,
+# per-run PDF) but with the trained model as the subject. That is what turns
+# "it escaped once" into "it escapes N% of its own collapses".
+#
+# provider local_hf  -> model loaded IN-PROCESS (no vLLM, no HTTP, no second job)
+# seeds_unseen_500   -> openers NOT in seeds_10k, so nothing here was trained on
+# max_tokens 512     -> match the harvest (short turns suppress collapse)
+#
+# history_window 5, NOT 1 -- the whole point of this revision.
+# The first run (history_window 1, exactly matching the harvest) collapsed in 4 of
+# 8 runs and fired <end> ZERO times. That was structural, not a model failure:
+# with a window of 1 the agent is shown only the PREVIOUS TURN, and a loop is
+# invisible in a single turn -- there is nothing to compare against. The model was
+# trained on 5-turn windows, and the offline eval (AUC 1.000) shows it detects
+# these very windows when it can see five.
+#
+# So window 1 can never produce an escape however good the model is. Window 5 is
+# what the model was trained for. The open risk is the other side of the tension
+# documented in Live_test.md: more context also keeps the model coherent, and in
+# the standalone harness a 5-turn window stopped the collapse from happening at
+# all. If that repeats here, the answer is a separate detection pass rather than a
+# wider generation window.
+
+fetcher_config:
+  fetcher: "sharegpt"
+  data_path: "data/seeds_unseen_500.json"
+  min_messages: 1
+  max_messages: 6
+
+analyzer_config:
+  analyzer: "similarity"
+  analyze_window: 10
+
+agent_configs:
+  - provider: "local_hf"
+    model: "/u/fash/internship-hpc-repo-template/models/end-token-A-qwen3b-full"
+    # NO system_prompt. This is not a style choice -- it decides whether the model
+    # works at all. Measured on 12 held-out positives (diagnose_end_firing.py):
+    #     with "You are a helpful assistant participating in a conversation."
+    #                                 -> fired  0/12,  mean P(<end>) 0.000
+    #     with no system prompt       -> fired  9/12,  mean P(<end>) 0.516
+    # The fine-tuning data had no system message, so Qwen's chat template supplied
+    # its own default and <end> got bound to THAT context. Any other system text is
+    # unseen territory and the model falls back to being an ordinary assistant --
+    # P(<end>) goes to literally zero. Every successful measurement in this project
+    # (AUC 1.000, the turn-12 escape) was taken with no system prompt; babel-ai was
+    # the first place one was introduced, and it silently zeroed the capability.
+    temperature: 1.0
+    max_tokens: 512
+    frequency_penalty: 0.0
+    presence_penalty: 0.0
+    # 0.95, matching the standalone run that produced the turn-12 escape. At 1.0
+    # nothing is truncated by probability mass either, which together with a
+    # disabled top_k produced pure sampling noise.
+    top_p: 0.95
+
+agent_selection_method: "round_robin"
+
+history_window: 5
+
+max_iterations: 28
+max_total_characters: 1000000
+output_dir: "/dais/fs/scratch/fash/results/livetest_end_model_fixed_sampling"

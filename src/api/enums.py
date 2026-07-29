@@ -32,6 +32,7 @@ class Provider(Enum):
     RAVEN = "raven"
     AZURE = "azure"
     ANTHROPIC = "anthropic"
+    LOCAL_HF = "local_hf"   # in-process HF model (no server) -- see api/local_hf.py
 
     def get_model_enum(self) -> Type[Enum]:
         """Get the corresponding model enum for this provider."""
@@ -49,6 +50,8 @@ class Provider(Enum):
                 return AzureModels
             case Provider.ANTHROPIC:
                 return AnthropicModels
+            case Provider.LOCAL_HF:
+                return LocalHFModels
             case _:
                 logger.error(
                     f"Invalid provider: {self}, available providers: "
@@ -79,12 +82,30 @@ class Provider(Enum):
                 return azure_openai_request
             case Provider.ANTHROPIC:
                 return anthropic_request
+            case Provider.LOCAL_HF:
+                from api.local_hf import local_hf_request
+                return local_hf_request
             case _:
                 logger.error(
                     f"Invalid provider: {self}, available providers: "
                     f"{Provider}"
                 )
                 raise ValueError(f"Invalid provider: {self}")
+
+
+class LocalHFModels(Enum):
+    """Locally fine-tuned models loaded IN-PROCESS (see api/local_hf.py).
+
+    The VALUE is a filesystem path -- local_hf_request passes it straight to
+    from_pretrained. Add an entry per trained model you want to run in babel-ai.
+    """
+
+    END_TOKEN_A_QWEN3B = (
+        "/u/fash/internship-hpc-repo-template/models/end-token-A-qwen3b-full"
+    )
+    END_TOKEN_A_QWEN3B_V4 = (
+        "/u/fash/internship-hpc-repo-template/models/end-token-A-qwen3b-v4"
+    )
 
 
 class OpenAIModels(Enum):
@@ -168,6 +189,16 @@ class OllamaCompanyModels(Enum):
     # Value = the pulled Ollama tag; endpoint set at runtime by the harvest job
     # (QWEN_2_5_3B_BASE_URL=http://localhost:11434/v1/, _API_KEY=ollama).
     QWEN_2_5_3B = "qwen2.5:3b-instruct-fp16"
+    # Local Ollama tags (served from scratch), distinct from the remote
+    # company-endpoint entries above which use HuggingFace-style names.
+    # Used as the CROSS-MODEL eval subject: collapses from a model we never
+    # train on, to test whether the <end> trigger generalises beyond Qwen-3B.
+    # Size-MATCHED cross-model control: same scale as the Qwen-3B subject, a
+    # different model family. Changes exactly one variable, so a failure means
+    # "family", not "scale". The 70B entry below confounds family with size.
+    LLAMA_3_2_3B_LOCAL = "llama3.2:3b-instruct-fp16"
+    LLAMA_3_3_70B_LOCAL = "llama3.3:70b-instruct-q8_0"
+    MIXTRAL_8X7B_LOCAL = "mixtral:8x7b-instruct-v0.1-q4_K_M"
 
 
 class AzureModels(Enum):
@@ -220,4 +251,5 @@ APIModels = Union[
     OllamaCompanyModels,
     AzureModels,
     AnthropicModels,
+    LocalHFModels,
 ]
