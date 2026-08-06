@@ -1,7 +1,7 @@
 fetcher_config:
   fetcher: "sharegpt"
-  data_path: "data/seeds_unseen_clean.json"
-  min_messages: 1
+  data_path: "data/seeds_unseen_hgh_500.json"
+  min_messages: 3
   max_messages: 6
 analyzer_config:
   analyzer: "similarity"

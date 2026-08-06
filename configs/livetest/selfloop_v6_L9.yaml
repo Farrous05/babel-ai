@@ -8,15 +8,7 @@ analyzer_config:
   analyze_window: 10
 agent_configs:
   - provider: "local_hf"
-    model: "/u/fash/internship-hpc-repo-template/models/end-token-A-qwen3b-full"
-    system_prompt: "You are a helpful assistant participating in a conversation."
-    temperature: 1.0
-    max_tokens: 512
-    frequency_penalty: 0.0
-    presence_penalty: 0.0
-    top_p: 0.8
-  - provider: "local_hf"
-    model: "/u/fash/internship-hpc-repo-template/models/end-token-A-qwen3b-full"
+    model: "/u/fash/internship-hpc-repo-template/models/end-token-A-qwen3b-v6-L9"
     system_prompt: "You are a helpful assistant participating in a conversation."
     temperature: 1.0
     max_tokens: 512
@@ -27,4 +19,4 @@ agent_selection_method: "round_robin"
 history_window: 5
 max_iterations: 28
 max_total_characters: 1000000
-output_dir: "/dais/fs/scratch/fash/results/livetest_v3v3_clean"
+output_dir: "/dais/fs/scratch/fash/results/livetest_v6_L9_selfloop"

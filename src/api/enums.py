@@ -106,6 +106,51 @@ class LocalHFModels(Enum):
     END_TOKEN_A_QWEN3B_V4 = (
         "/u/fash/internship-hpc-repo-template/models/end-token-A-qwen3b-v4"
     )
+    END_TOKEN_A_QWEN3B_V5 = (
+        "/u/fash/internship-hpc-repo-template/models/end-token-A-qwen3b-v5"
+    )
+    END_TOKEN_A_QWEN3B_V51 = (
+        "/u/fash/internship-hpc-repo-template/models/end-token-A-qwen3b-v51"
+    )
+    # v6 length study: L = healthy turns trained AFTER the escape; _BH = the
+    # arm that restores babel_healthy negatives (v4's mix) to test whether the
+    # silent-collapse regression in v5/v5.1 came from dropping them.
+    END_TOKEN_A_QWEN3B_V6_L3 = (
+        "/u/fash/internship-hpc-repo-template/models/end-token-A-qwen3b-v6-L3"
+    )
+    END_TOKEN_A_QWEN3B_V6_L3_BH = (
+        "/u/fash/internship-hpc-repo-template/models/end-token-A-qwen3b-v6-L3-bh"
+    )
+    END_TOKEN_A_QWEN3B_V6_L9 = (
+        "/u/fash/internship-hpc-repo-template/models/end-token-A-qwen3b-v6-L9"
+    )
+    END_TOKEN_A_QWEN3B_V6_L9_BH = (
+        "/u/fash/internship-hpc-repo-template/models/end-token-A-qwen3b-v6-L9-bh"
+    )
+    END_TOKEN_A_QWEN3B_V6_L15 = (
+        "/u/fash/internship-hpc-repo-template/models/end-token-A-qwen3b-v6-L15"
+    )
+    END_TOKEN_A_QWEN3B_V6_L15_BH = (
+        "/u/fash/internship-hpc-repo-template/models/end-token-A-qwen3b-v6-L15-bh"
+    )
+    END_TOKEN_A_QWEN3B_V61_L3 = (
+        "/u/fash/internship-hpc-repo-template/models/end-token-A-qwen3b-v61-L3"
+    )
+    END_TOKEN_A_QWEN3B_V61_L3_BH = (
+        "/u/fash/internship-hpc-repo-template/models/end-token-A-qwen3b-v61-L3-bh"
+    )
+    END_TOKEN_A_QWEN3B_V62_L3 = (
+        "/u/fash/internship-hpc-repo-template/models/end-token-A-qwen3b-v62-L3"
+    )
+    END_TOKEN_A_QWEN3B_V63_L9 = (
+        "/u/fash/internship-hpc-repo-template/models/end-token-A-qwen3b-v63-L9"
+    )
+    END_TOKEN_A_QWEN3B_V61_L9 = (
+        "/u/fash/internship-hpc-repo-template/models/end-token-A-qwen3b-v61-L9"
+    )
+    # Untrained base -- a NORMAL conversation partner (never fires <end>; its
+    # tokenizer has no such token). Loaded by HF id from cache, not a local path.
+    QWEN2_5_3B_INSTRUCT = "Qwen/Qwen2.5-3B-Instruct"
 
 
 class OpenAIModels(Enum):
