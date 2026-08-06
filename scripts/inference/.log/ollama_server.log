@@ -1,0 +1,3 @@
+FATAL:   While checking container encryption: could not open image /dais/u/fash/babel-ai/scripts/inference/container/ollama.sif: failed to retrieve path for /dais/u/fash/babel-ai/scripts/inference/container/ollama.sif: lstat /dais/u/fash/babel-ai/scripts/inference/container: no such file or directory
+srun: error: daisg108: task 0: Exited with exit code 255
+srun: Terminating StepId=357321.0
